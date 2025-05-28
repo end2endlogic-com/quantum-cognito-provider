@@ -82,6 +82,7 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
             String refreshToken = authResult.refreshToken();
             Set<String> groups = getUserGroups(userId);
             SecurityIdentity identity = buildIdentity(userId, groups);
+            securityIdentityAssociation.setIdentity(identity);
 
             return new LoginResponse(
                 true,
