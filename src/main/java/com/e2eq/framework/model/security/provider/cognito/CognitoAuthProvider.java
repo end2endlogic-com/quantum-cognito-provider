@@ -1,15 +1,19 @@
 package com.e2eq.framework.model.security.provider.cognito;
 
 import com.e2eq.framework.exceptions.ReferentialIntegrityViolationException;
+import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
+import com.e2eq.framework.model.persistent.security.CredentialUserIdPassword;
 import com.e2eq.framework.model.persistent.security.DomainContext;
 import com.e2eq.framework.model.security.auth.AuthProvider;
 import com.e2eq.framework.model.security.auth.UserManagement;
 
 import com.e2eq.framework.util.TokenUtils;
+import com.e2eq.framework.util.ValidateUtils;
 import io.quarkus.logging.Log;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.quarkus.security.runtime.QuarkusSecurityIdentity;
 import io.quarkus.security.runtime.SecurityIdentityAssociation;
+import io.smallrye.jwt.auth.principal.JWTParser;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.json.JsonArray;
@@ -30,8 +34,11 @@ import software.amazon.awssdk.services.cognitoidentityprovider.model.*;
 @ApplicationScoped
 public class CognitoAuthProvider implements AuthProvider, UserManagement {
 
-    //@Inject
-    CognitoTokenValidator tokenValidator;
+    @Inject
+    CredentialRepo credentialRepo;
+
+    @Inject
+    JWTParser jwtParser;
 
     @Inject
     SecurityIdentityAssociation securityIdentityAssociation;
@@ -81,6 +88,7 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
             String accessToken = authResult.accessToken();
             String refreshToken = authResult.refreshToken();
             Set<String> groups = getUserGroups(userId);
+
             SecurityIdentity identity = buildIdentity(userId, groups);
             securityIdentityAssociation.setIdentity(identity);
 
@@ -157,11 +165,15 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
     }
 
     @Override
-    public boolean userExists(String username) {
+    public boolean usernameExists(String username) {
+        Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUsername(username);
+        if (!ocred.isPresent()) {
+            throw new IllegalStateException(String.format("Credential not configured in database for username: %s  can not resolve username given userid in realm: %s , cognito needs username but it could not be resolved, configure credentials in realm", username , credentialRepo.getDatabaseName()));
+        }
         try {
             AdminGetUserRequest request = AdminGetUserRequest.builder()
                 .userPoolId(userPoolId)
-                .username(username)
+                .username(ocred.get().getUserId())
                 .build();
 
             cognitoClient.adminGetUser(request);
@@ -172,6 +184,32 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
             Log.error("Error checking user existence", e);
             throw new SecurityException(
                 "Failed to check user existence: " + e.getMessage()
+            );
+        }
+    }
+
+    @Override
+    public boolean userIdExists(String userId) {
+
+        Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId);
+        if (!ocred.isPresent()) {
+            throw new IllegalStateException("Credential not configured in database for user ID: " + userId + " can not resolve username given userid in realm:" + credentialRepo.getDatabaseName() + ", cognito needs username but it could not be resolved, configure credentials in realm");
+        }
+
+        try {
+            AdminGetUserRequest request = AdminGetUserRequest.builder()
+                                             .userPoolId(userPoolId)
+                                             .username(userId)
+                                             .build();
+
+            cognitoClient.adminGetUser(request);
+            return true;
+        } catch (UserNotFoundException e) {
+            return false;
+        } catch (Exception e) {
+            Log.error("Error checking user existence", e);
+            throw new SecurityException(
+               "Failed to check user existence: " + e.getMessage()
             );
         }
     }
@@ -200,8 +238,12 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
     public SecurityIdentity validateAccessToken(String token) {
         try {
             // Validate the token using CognitoTokenValidator
-            JsonWebToken webToken = tokenValidator.validateToken(token);
+            JsonWebToken webToken = jwtParser.parse(token);
             String username = webToken.claim("username").toString();
+            Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUsername(username);
+            if (!ocred.isPresent()) {
+                throw new IllegalStateException("Credential not configured in database for username: " + username + " can not resolve userid given username in realm:" + credentialRepo.getDatabaseName() + ", cognito needs userid but it could not be resolved, configure credentials in realm");
+            }
             Set<String> roles = new HashSet<>();
             if (webToken.containsClaim("cognito:groups")) {
                 Optional<JsonArray> ogroupsArray = webToken.claim(
@@ -216,7 +258,7 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
                 roles = getUserGroups(username);
             }
 
-            SecurityIdentity identity = buildIdentity(username, roles);
+            SecurityIdentity identity = buildIdentity(ocred.get().getUserId(), roles);
             // Set the SecurityIdentity for the current request
             securityIdentityAssociation.setIdentity(identity);
             return identity;
@@ -248,18 +290,29 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
                 .map(GroupType::groupName)
                 .collect(Collectors.toSet());
         } catch (Exception e) {
-            Log.error("Failed to get user groups", e);
+            Log.error(String.format("Failed to get user groups for username:%s", username), e);
             return new HashSet<>();
         }
     }
 
     @Override
     public void createUser(
-        String username,
+        String userId,
         String password,
+        String username,
         Set<String> roles,
         DomainContext domainContext
     ) throws SecurityException {
+
+       if (!ValidateUtils.isValidEmailAddress(userId)) {
+           throw new IllegalArgumentException("UserId should be a valid email address, given: " + userId);
+       }
+
+       if (credentialRepo.findByUserId(userId).isPresent()) {
+           throw new SecurityException(String.format("User %s already exists in realm: %s",userId, credentialRepo.getDatabaseName()));
+       }
+
+
         try {
             // Create user in Cognito
             AdminCreateUserRequest createRequest =
@@ -271,7 +324,7 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
                     .userAttributes(
                         AttributeType.builder()
                             .name("email")
-                            .value(username)
+                            .value(userId)
                             .build(),
                         AttributeType.builder()
                             .name("email_verified")
@@ -280,7 +333,14 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
                     )
                     .build();
 
-            cognitoClient.adminCreateUser(createRequest);
+            AdminCreateUserResponse response = cognitoClient.adminCreateUser(createRequest);
+            if (!response.sdkHttpResponse().isSuccessful()) {
+                throw new SecurityException(
+                    "Failed to create user: " + response.toString()
+                );
+            }
+            Log.info("User Created with username: " + username);
+            response.user().attributes().stream().forEach(attr -> {Log.infof("    %s:%s", attr.name(), attr.value());});
 
             // Set permanent password
             AdminSetUserPasswordRequest passwordRequest =
@@ -318,8 +378,14 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
                     .username(username)
                     .build();
 
-            cognitoClient.adminDeleteUser(deleteRequest);
-            return true;
+            AdminDeleteUserResponse response =  cognitoClient.adminDeleteUser(deleteRequest);
+            if (!response.sdkHttpResponse().isSuccessful()) {
+                Log.warnf("remove username %s  failed with message: %s", username, response.sdkHttpResponse().statusText().orElse(""));
+                return false;
+            } else {
+                Log.infof("remove username %s  successful", username);
+                return true;
+            }
         } catch (UserNotFoundException e) {
             return false;
         }

@@ -1,6 +1,5 @@
 package auth;
 
-import com.e2eq.framework.model.security.auth.AuthProvider;
 import com.e2eq.framework.rest.models.AuthRequest;
 import com.e2eq.framework.rest.models.AuthResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
