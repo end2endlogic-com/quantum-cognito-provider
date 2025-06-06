@@ -2,12 +2,15 @@ package auth;
 
 import com.e2eq.framework.rest.models.AuthRequest;
 import com.e2eq.framework.rest.models.AuthResponse;
+import com.e2eq.framework.util.TestUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.logging.Log;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
+import org.checkerframework.checker.units.qual.C;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.junit.jupiter.api.Test;
 
@@ -22,13 +25,18 @@ public class TestCognitoRestEndPoints {
     @ConfigProperty(name = "auth.provider")
     String authProvider;
 
+    @Inject
+    TestUtils testUtils;
+
     @ConfigProperty(name = "test.userId")
     String testUserId;
 
     @ConfigProperty(name = "test.password")
     String testPassword;
 
-   // @Test
+
+
+    @Test
     public void testAdminLogin() throws JsonProcessingException {
         if (authProvider.equals("cognito")) {
 
@@ -40,26 +48,31 @@ public class TestCognitoRestEndPoints {
 
          AuthResponse response = given()
                  .contentType(ContentType.JSON)
+                  .queryParam("realm", testUtils.getTestRealm())
                  .body(value)
                  .when()
                  .post("/security/login")
+
                  .then()
                  .statusCode(Response.Status.OK.getStatusCode())
                  .body("access_token", notNullValue())
                  .body("refresh_token", notNullValue())
                  .extract()
                  .as(AuthResponse.class);
+         String accessToken = response.getAccess_token();
 
-         Log.info("Access Token: " + response.getAccess_token());
+         Log.info("Access Token: " + accessToken);
+
+         Log.info("===== Attempting to call /test/secure/hello ======");
 
          // Test admin access
          given()
-                 .header("Authorization", "Bearer " + response.getAccess_token())
+                 .header("Authorization", "Bearer " + accessToken)
+                 .queryParam("realm", testUtils.getTestRealm())
                  .when()
-                 .post("/secure/create")
+                 .get("/test/secure/hello")
                  .then()
-                 .statusCode(200)
-                 .body("message", equalTo("Secure content created"));
+                 .statusCode(200);
         } else {
             Log.info("Test skipped for auth provider: " + authProvider);
         }
@@ -76,6 +89,7 @@ public class TestCognitoRestEndPoints {
 
             AuthResponse response = given()
                                        .contentType(ContentType.JSON)
+                                       .queryParam("realm", testUtils.getTestRealm())
                                        .body(value)
                                        .when()
                                        .post("/security/login")
