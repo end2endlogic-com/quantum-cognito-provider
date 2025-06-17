@@ -2,6 +2,7 @@ package com.e2eq.framework.model.security.provider.cognito;
 
 import com.e2eq.framework.exceptions.ReferentialIntegrityViolationException;
 import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
+import com.e2eq.framework.model.persistent.morphia.MorphiaUtils;
 import com.e2eq.framework.model.persistent.security.CredentialUserIdPassword;
 import com.e2eq.framework.model.persistent.security.DomainContext;
 import com.e2eq.framework.model.security.auth.AuthProvider;
@@ -83,7 +84,7 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
         if (realm == null)
             ocred = credentialRepo.findByUserId(userId);
         else
-            ocred = credentialRepo.findByUserId(realm,userId);
+            ocred = credentialRepo.findByUserId(userId, realm);
 
         if (!ocred.isPresent()) {
             throw new WebApplicationException(String.format("user with userId:%s could not be found in the credentials collection in realm:%s", userId, credentialRepo.getDatabaseName()));
@@ -541,5 +542,25 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
     @Override
     public Set<String> getUserRoles(String username) throws SecurityException {
         return getUserGroups(username);
+    }
+
+    @Override
+    public void enableImpersonation (String userId, String impersonationScript, String realmFilter, String realmToEnableIn) {
+        Objects.requireNonNull(userId, "userId must be provided");
+        Objects.requireNonNull(impersonationScript, "impersonationScript must be provided");
+        Objects.requireNonNull(realmFilter, "realmFilter must be provided");
+        Objects.requireNonNull(realmToEnableIn, "realmToEnableIn must be provided");
+
+        MorphiaUtils.validateQueryString(realmFilter);
+        Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId, realmToEnableIn);
+        ocred.ifPresentOrElse(
+           credential -> {
+               credential.setImpersonateFilter(impersonationScript);
+               credential.setRealmFilter(realmFilter);
+               credentialRepo.save(credential);
+           },
+           () -> {
+               throw new SecurityException(String.format("UserId:%s not found in realm:%s ",userId, realmToEnableIn));
+           });
     }
 }

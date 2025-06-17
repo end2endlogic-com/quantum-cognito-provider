@@ -68,7 +68,7 @@ public class TestCognitoRestEndPoints {
          // Test admin access
          given()
                  .header("Authorization", "Bearer " + accessToken)
-                 .queryParam("realm", testUtils.getTestRealm())
+                 .header("X-Realm", testUtils.getTestRealm())
                  .when()
                  .get("/test/secure/hello")
                  .then()
@@ -89,7 +89,7 @@ public class TestCognitoRestEndPoints {
 
             AuthResponse response = given()
                                        .contentType(ContentType.JSON)
-                                       .queryParam("realm", testUtils.getTestRealm())
+                                       .queryParam("realm", testUtils.getTestRealm()) // login take realm as parameter
                                        .body(value)
                                        .when()
                                        .post("/security/login")
