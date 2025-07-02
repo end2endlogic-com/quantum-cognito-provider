@@ -3,6 +3,7 @@ package com.e2eq.framework.model.security.provider.cognito;
 import com.e2eq.framework.exceptions.ReferentialIntegrityViolationException;
 import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
 import com.e2eq.framework.model.persistent.morphia.MorphiaUtils;
+import com.e2eq.framework.model.persistent.morphia.UserProfileRepo;
 import com.e2eq.framework.model.persistent.security.CredentialUserIdPassword;
 import com.e2eq.framework.model.persistent.security.DomainContext;
 import com.e2eq.framework.model.security.auth.AuthProvider;
@@ -28,6 +29,7 @@ import java.util.stream.Collectors;
 
 import jakarta.validation.constraints.NotNull;
 import jakarta.ws.rs.WebApplicationException;
+import org.apache.commons.lang3.NotImplementedException;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.jwt.JsonWebToken;
 import software.amazon.awssdk.services.cognitoidentityprovider.CognitoIdentityProviderClient;
@@ -65,6 +67,8 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
     Long durationInSeconds;
 
     private final CognitoIdentityProviderClient cognitoClient;
+   @Inject
+   UserProfileRepo userProfileRepo;
 
     /**
      * Constructor for CognitoAuthProvider.
@@ -192,49 +196,187 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
 
     @Override
     public boolean usernameExists(String username) {
-
-        try {
-            AdminGetUserRequest request = AdminGetUserRequest.builder()
-                .userPoolId(userPoolId)
-                .username(username)
-                .build();
-
-            cognitoClient.adminGetUser(request);
-            return true;
-        } catch (UserNotFoundException e) {
-            return false;
-        } catch (Exception e) {
-            Log.error("Error checking user existence", e);
-            throw new SecurityException(
-                "Failed to check user existence: " + e.getMessage()
-            );
-        }
+      return usernameExists(credentialRepo.getSecurityContextRealmId(), username);
     }
+
+   @Override
+   public boolean usernameExists (String realm, String username) throws SecurityException {
+
+      Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUsername(username, realm);
+      if (!ocred.isPresent()) {
+         Log.warnf("Credential not configured in database for username: %s  can not resolve credential given username in realm: %s, cognito needs username but it could not be resolved, configure credentials in realm", username, realm);
+         return false;
+      }
+      try {
+         AdminGetUserRequest request = AdminGetUserRequest.builder()
+                                          .userPoolId(userPoolId)
+                                          .username(username)
+                                          .build();
+
+         cognitoClient.adminGetUser(request);
+         return true;
+      } catch (UserNotFoundException e) {
+         return false;
+      } catch (Exception e) {
+         Log.error("Error checking user existence", e);
+         throw new SecurityException(
+            "Failed to check user existence: " + e.getMessage()
+         );
+      }
+   }
+
+   @Override
+   public boolean userIdExists (String realm, String userId) throws SecurityException {
+      //return userIdExists(userId);
+      // We are being given a userId and we need to now translate this to a username.  The only way we can do that is via the credential collection
+      // however if the credential database does not have it / has not been set up then we either throw an exception to this effect or we lie and say its not
+      // I choose to throw an exception to the caller.
+      Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId, realm);
+      if (!ocred.isPresent()) {
+         Log.warnf("Credential not configured in database for userid: %s  can not resolve username given userid in realm: %s, cognito needs username but it could not be resolved, configure credentials in realm", userId, credentialRepo.getDatabaseName());
+         return false;
+      }
+
+      AdminGetUserRequest request = AdminGetUserRequest.builder()
+                                       .userPoolId(userPoolId)
+                                       .username(ocred.get().getUserId())
+                                       .build();
+      try {
+         cognitoClient.adminGetUser(request);
+      } catch (UserNotFoundException e) {
+         return false;
+      }
+      return true;
+   }
 
     @Override
     public boolean userIdExists(String userId) {
+         return userIdExists(credentialRepo.getSecurityContextRealmId(), userId);
 
-            // We are being given a userId and we need to now translate this to a username.  The only way we can do that is via the credential collection
-            // however if the credential database does not have it / has not been set up then we either throw an exception to this effect or we lie and say its not
-            // I choose to throw an exception to the caller.
-            Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId);
-            if (!ocred.isPresent()) {
-                throw new IllegalStateException(String.format("Credential not configured in database for userid: %s  can not resolve username given userid in realm: %s, cognito needs username but it could not be resolved, configure credentials in realm", userId, credentialRepo.getDatabaseName()));
-            }
-
-            AdminGetUserRequest request = AdminGetUserRequest.builder()
-                                             .userPoolId(userPoolId)
-                                             .username(ocred.get().getUsername())
-                                             .build();
-            try {
-               cognitoClient.adminGetUser(request);
-            } catch (UserNotFoundException e) {
-               return false;
-            }
-            return true;
     }
 
+    @Override
+    public void createUser (String realm, String userId, String password, String username, Set<String> roles, DomainContext domainContext) throws SecurityException {
+        Log.infof("Creating userId:%s, username:%s, roles:%s, domainContext:%s in realm:%s", userId, username, roles, domainContext, realm);
+
+        if (!ValidateUtils.isValidEmailAddress(userId)) {
+            throw new IllegalArgumentException("UserId should be a valid email address, given: " + userId);
+        }
+
+
+        try {
+            Log.infof("Checking userId:%s in cognito", userId);
+            // check if user already exists in cognito
+            if (!this.userIdExists(realm, userId)) {
+                Log.infof("User does not exist in cognito, creating user with userId:%s and username:%s", userId, username);
+                // Create user in Cognito
+                AdminCreateUserRequest createRequest =
+                   AdminCreateUserRequest.builder()
+                      .userPoolId(userPoolId)
+                      .username(userId) // because cognito could be configured to only accept email addresses as the username not a guid
+                      .temporaryPassword(password)
+                      .messageAction(MessageActionType.SUPPRESS) // Suppress welcome email
+                      .userAttributes(
+                         AttributeType.builder()
+                            .name("email")
+                            .value(userId)
+                            .build(),
+                         AttributeType.builder()
+                            .name("email_verified")
+                            .value("true")
+                            .build()
+                      )
+                      .build();
+
+                AdminCreateUserResponse response = cognitoClient.adminCreateUser(createRequest);
+                if (!response.sdkHttpResponse().isSuccessful()) {
+                    throw new SecurityException(
+                       "Failed to create user: " + response.toString()
+                    );
+                }
+                Log.info("User Created with username: " + response.user().username());
+                username = response.user().username();
+
+                // Set permanent password
+                AdminSetUserPasswordRequest passwordRequest =
+                   AdminSetUserPasswordRequest.builder()
+                      .userPoolId(userPoolId)
+                      .username(userId)
+                      .password(password)
+                      .permanent(true)
+                      .build();
+
+                AdminSetUserPasswordResponse pwResponse = cognitoClient.adminSetUserPassword(passwordRequest);
+
+                // Assign roles if provided
+                if (!roles.isEmpty()) {
+                    assignRoles(userId, roles);
+                }
+            } else {
+                Log.warnf("UserId %s already exists in cognito, skipping creation", userId);
+            }
+
+            Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId( userId, realm);
+
+            if (ocred.isPresent()) {
+                Log.debug("User already exists in the credentials database, checking configuration");
+                if (!ocred.get().getUsername().equals(username) && ocred.get().getPasswordHash().equals(EncryptionUtils.hashPassword(password)) &&
+                       ocred.get().getDomainContext().equals(domainContext) && new HashSet<>(List.of(ocred.get().getRoles())).containsAll(roles)) {
+                    throw new SecurityException(String.format("User %s already exists in realm: %s with different configuration check database", userId, credentialRepo.getDatabaseName()));
+                } else {
+                    Log.warnf("User %s already exists in realm: %s with same configuration, skipping  credential creation", userId, credentialRepo.getDatabaseName());
+                }
+            } else {
+                Log.info("User does not exist in the credentials database, creating credentials");
+                CredentialUserIdPassword credential = new CredentialUserIdPassword();
+                credential.setRefName(username);
+                credential.setUserId(userId);
+                credential.setUsername(username);
+                credential.setPasswordHash(EncryptionUtils.hashPassword(password));
+                credential.setDomainContext(domainContext);
+                credential.setRoles(roles.toArray(new String[roles.size()]));
+                credential.setLastUpdate(new Date());
+                credential = credentialRepo.save(realm, credential);
+                Log.infof("Credential created with username:%s userId:%s in realm:%s", username, userId, realm);
+
+            }
+        } catch (UsernameExistsException e) {
+            throw new SecurityException("User already exists: " + username);
+        } catch (Exception e) {
+            Log.error("Failed to create user", e);
+            throw new SecurityException(
+               "Failed to create user: " + e.getMessage()
+            );
+        }
+
+    }
+
+    @Override
+    public boolean removeUser (String realm, String username) throws ReferentialIntegrityViolationException {
+        return removeUser(username);
+    }
+
+    @Override
+    public void assignRoles (String realm, String username, Set<String> roles) throws SecurityException {
+         assignRoles(username, roles);
+    }
+
+    @Override
+    public void removeRoles (String realm, String username, Set<String> roles) throws SecurityException {
+        removeRoles(username, roles);
+    }
+
+    @Override
+    public Set<String> getUserRoles (String realm, String username) throws SecurityException {
+       return getUserRoles(username);
+    }
+
+
+
     private SecurityIdentity buildIdentity(String userId, Set<String> roles) {
+        if (Log.isDebugEnabled()) {
+            Log.debug("Building identity for userId: " + userId + " with roles: " + roles);
+        }
         QuarkusSecurityIdentity.Builder builder =
             QuarkusSecurityIdentity.builder();
         builder.setPrincipal(
@@ -372,89 +514,7 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
         DomainContext domainContext
     ) throws SecurityException {
 
-        Log.infof("Creating userId:%s, username:%s, roles:%s, domainContext:%s", userId, username, roles, domainContext);
-
-       if (!ValidateUtils.isValidEmailAddress(userId)) {
-           throw new IllegalArgumentException("UserId should be a valid email address, given: " + userId);
-       }
-
-        Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId);
-
-       if (ocred.isPresent()) {
-           Log.debug("User already exists in the credentials database, checking configuration");
-           if (!ocred.get().getUsername().equals(username) && ocred.get().getPasswordHash().equals(EncryptionUtils.hashPassword(password)) &&
-           ocred.get().getDomainContext().equals(domainContext) && new HashSet<>(List.of(ocred.get().getRoles())).containsAll(roles)) {
-               throw new SecurityException(String.format("User %s already exists in realm: %s with different configuration check database", userId, credentialRepo.getDatabaseName()));
-           } else {
-               Log.warnf("User %s already exists in realm: %s with same configuration, skipping  credential creation", userId, credentialRepo.getDatabaseName());
-           }
-       } else {
-           Log.info("User does not exist in the credentials database, creating credentials");
-           CredentialUserIdPassword credential = new CredentialUserIdPassword();
-           credential.setUserId(userId);
-           credential.setUsername(username);
-           credential.setPasswordHash(EncryptionUtils.hashPassword(password));
-           credential.setDomainContext(domainContext);
-           credential.setRoles(roles.toArray(new String[roles.size()]));
-           credential.setLastUpdate(new Date());
-           credential = credentialRepo.save(credential);
-           Log.infof("Credential created with username:%s userId:%s", username, userId);
-
-       }
-
-        try {
-            Log.info("Creating user in cognito");
-            // Create user in Cognito
-            AdminCreateUserRequest createRequest =
-                AdminCreateUserRequest.builder()
-                    .userPoolId(userPoolId)
-                    .username(username)
-                    .temporaryPassword(password)
-                    .messageAction(MessageActionType.SUPPRESS) // Suppress welcome email
-                    .userAttributes(
-                        AttributeType.builder()
-                            .name("email")
-                            .value(userId)
-                            .build(),
-                        AttributeType.builder()
-                            .name("email_verified")
-                            .value("true")
-                            .build()
-                    )
-                    .build();
-
-            AdminCreateUserResponse response = cognitoClient.adminCreateUser(createRequest);
-            if (!response.sdkHttpResponse().isSuccessful()) {
-                throw new SecurityException(
-                    "Failed to create user: " + response.toString()
-                );
-            }
-            Log.info("User Created with username: " + username);
-            response.user().attributes().stream().forEach(attr -> {Log.infof("    %s:%s", attr.name(), attr.value());});
-
-            // Set permanent password
-            AdminSetUserPasswordRequest passwordRequest =
-                AdminSetUserPasswordRequest.builder()
-                    .userPoolId(userPoolId)
-                    .username(username)
-                    .password(password)
-                    .permanent(true)
-                    .build();
-
-            cognitoClient.adminSetUserPassword(passwordRequest);
-
-            // Assign roles if provided
-            if (!roles.isEmpty()) {
-                assignRoles(username, roles);
-            }
-        } catch (UsernameExistsException e) {
-            throw new SecurityException("User already exists: " + username);
-        } catch (Exception e) {
-            Log.error("Failed to create user", e);
-            throw new SecurityException(
-                "Failed to create user: " + e.getMessage()
-            );
-        }
+        createUser( userProfileRepo.getSecurityContextRealmId(),  userId, password, username, roles, domainContext);
     }
 
     @Override
