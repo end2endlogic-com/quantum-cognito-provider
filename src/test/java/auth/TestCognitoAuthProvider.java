@@ -59,7 +59,7 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
 
       try (final SecuritySession s = new SecuritySession(pContext, rContext)) {
         if (userManager.usernameExists(testUsername)) {
-           userManager.removeUser(testUsername);
+           userManager.removeUserWithUsername(testUsername);
         }
 
          userManager.createUser(testUserId, testPassword, testUsername, Set.of("user", "admin"), DomainContext.builder()
@@ -93,10 +93,10 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
             Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(testUserId);
             if (ocred.isPresent()) {
                credentialRepo.delete(ocred.get());
-               if (!userManager.removeUser(ocred.get().getUsername())) {
+               if (!userManager.removeUserWithUsername(ocred.get().getUsername())) {
                   throw new IllegalStateException(String.format("User not removed in cognito usr name:%s with userid:%s in credentials collection in  realm: %s may be stale", ocred.get().getUsername(),ocred.get().getUserId(), credentialRepo.getDatabaseName()));
                }
-               boolean removed = userManager.removeUser(ocred.get().getUsername());
+               boolean removed = userManager.removeUserWithUsername(ocred.get().getUsername());
                if (!removed) {
                   Log.warnf("User not removed could not find userName:%s in credentials collection in  realm: %s: ", ocred.get().getUsername(), credentialRepo.getDatabaseName());
                }
@@ -104,7 +104,7 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
             }
             if (userManager.usernameExists(testUsername)) {
                // user exists in cognito but does exist in the credentials database
-               // create it in the credentials database
+               // create it in the credential database
                CredentialUserIdPassword cred = CredentialUserIdPassword.builder()
                                              .userId(testUserId)
                                              .username(testUsername)

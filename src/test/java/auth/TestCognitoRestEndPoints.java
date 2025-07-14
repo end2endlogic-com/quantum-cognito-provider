@@ -1,5 +1,8 @@
 package auth;
 
+import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
+import com.e2eq.framework.model.security.auth.AuthProviderFactory;
+import com.e2eq.framework.model.security.auth.UserManagement;
 import com.e2eq.framework.rest.models.AuthRequest;
 import com.e2eq.framework.rest.models.AuthResponse;
 import com.e2eq.framework.util.TestUtils;
@@ -12,6 +15,7 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 import org.checkerframework.checker.units.qual.C;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -34,11 +38,23 @@ public class TestCognitoRestEndPoints {
     @ConfigProperty(name = "test.password")
     String testPassword;
 
+    @Inject
+    CredentialRepo credentialRepo;
 
+    @Inject
+    AuthProviderFactory authProviderFactory;
 
     @Test
     public void testAdminLogin() throws JsonProcessingException {
         if (authProvider.equals("cognito")) {
+
+            // ensure the credentials exist in cognito and credential database
+            UserManagement userManager = authProviderFactory.getUserManager();
+
+            if( !userManager.userIdExists(testUtils.getTestRealm(), testUserId) ) {
+                throw new RuntimeException(String.format("Test userId:%s does not exist in cognito or credential database in realm:%s", testUserId, testUtils.getTestRealm()));
+            }
+
 
             AuthRequest request = new AuthRequest();
             request.setUserId(testUserId);
@@ -48,11 +64,10 @@ public class TestCognitoRestEndPoints {
 
          AuthResponse response = given()
                  .contentType(ContentType.JSON)
-                  .queryParam("realm", testUtils.getTestRealm())
+                 .header("X-Realm", testUtils.getTestRealm())
                  .body(value)
                  .when()
                  .post("/security/login")
-
                  .then()
                  .statusCode(Response.Status.OK.getStatusCode())
                  .body("access_token", notNullValue())
