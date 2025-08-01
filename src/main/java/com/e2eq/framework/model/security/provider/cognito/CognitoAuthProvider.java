@@ -168,20 +168,32 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
     public boolean usernameExists(String username) {
         Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUsername(username);
         if (!ocred.isPresent()) {
-            throw new IllegalStateException(String.format("Credential not configured in database for username: %s  can not resolve username given userid in realm: %s , cognito needs username but it could not be resolved, configure credentials in realm", username , credentialRepo.getDatabaseName()));
+            throw new IllegalStateException(
+                String.format(
+                    "Credential not configured in database for username: %s cannot resolve Cognito username in realm: %s",
+                    username,
+                    credentialRepo.getDatabaseName()
+                )
+            );
         }
         try {
-            AdminGetUserRequest request = AdminGetUserRequest.builder()
-                .userPoolId(userPoolId)
-                .username(ocred.get().getUserId())
-                .build();
+            String cognitoUsername = ocred.get().getUsername();
+            AdminGetUserRequest request =
+                AdminGetUserRequest.builder()
+                    .userPoolId(userPoolId)
+                    .username(cognitoUsername)
+                    .build();
 
             cognitoClient.adminGetUser(request);
             return true;
         } catch (UserNotFoundException e) {
             return false;
         } catch (Exception e) {
-            Log.error("Error checking user existence", e);
+            Log.errorf(
+                "Error checking user existence for username %s",
+                ocred.get().getUsername(),
+                e
+            );
             throw new SecurityException(
                 "Failed to check user existence: " + e.getMessage()
             );
@@ -193,21 +205,32 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
 
         Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId);
         if (!ocred.isPresent()) {
-            throw new IllegalStateException("Credential not configured in database for user ID: " + userId + " can not resolve username given userid in realm:" + credentialRepo.getDatabaseName() + ", cognito needs username but it could not be resolved, configure credentials in realm");
+            throw new IllegalStateException(
+                "Credential not configured in database for user ID: " +
+                userId +
+                " cannot resolve Cognito username in realm:" +
+                credentialRepo.getDatabaseName()
+            );
         }
 
         try {
-            AdminGetUserRequest request = AdminGetUserRequest.builder()
-                                             .userPoolId(userPoolId)
-                                             .username(userId)
-                                             .build();
+            String cognitoUsername = ocred.get().getUsername();
+            AdminGetUserRequest request =
+                AdminGetUserRequest.builder()
+                    .userPoolId(userPoolId)
+                    .username(cognitoUsername)
+                    .build();
 
             cognitoClient.adminGetUser(request);
             return true;
         } catch (UserNotFoundException e) {
             return false;
         } catch (Exception e) {
-            Log.error("Error checking user existence", e);
+            Log.errorf(
+                "Error checking user existence for username %s",
+                ocred.get().getUsername(),
+                e
+            );
             throw new SecurityException(
                "Failed to check user existence: " + e.getMessage()
             );
