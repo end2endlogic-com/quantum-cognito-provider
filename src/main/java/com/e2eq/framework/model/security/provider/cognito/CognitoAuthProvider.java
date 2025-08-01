@@ -9,6 +9,7 @@ import com.e2eq.framework.model.persistent.security.DomainContext;
 import com.e2eq.framework.model.security.auth.AuthProvider;
 import com.e2eq.framework.model.security.auth.UserManagement;
 
+import com.e2eq.framework.model.security.auth.provider.jwtToken.BaseAuthProvider;
 import com.e2eq.framework.util.EncryptionUtils;
 import com.e2eq.framework.util.SecurityUtils;
 import com.e2eq.framework.util.TokenUtils;
@@ -41,7 +42,7 @@ import software.amazon.awssdk.services.cognitoidentityprovider.model.*;
  * It provides authentication and user management functionalities using AWS Cognito.
  */
 @ApplicationScoped
-public class CognitoAuthProvider implements AuthProvider, UserManagement {
+public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvider, UserManagement {
 
     @Inject
     CredentialRepo credentialRepo;
@@ -256,11 +257,52 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
     @Override
     public boolean userIdExists(String userId) {
          return userIdExists(securityUtils.getSystemRealm(), userId);
-
     }
 
+   @Override
+   public void changePassword(String userId, String oldPassword, String newPassword, Boolean forceChangePassword) {
+       changePassword(securityUtils.getSystemRealm(), userId, oldPassword, newPassword, forceChangePassword);
+   }
+
+   @Override
+   public void changePassword(String realm, String userId, String oldPassword, String newPassword, Boolean forceChangePassword) {
+       Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId, realm);
+       if (!ocred.isPresent()) {
+          Log.warnf("Credential not configured in database for userid: %s  can not resolve username given userid in realm: %s, cognito needs username but it could not be resolved, configure credentials in realm", userId, realm);
+          return;
+       }
+
+      AdminSetUserPasswordRequest request = AdminSetUserPasswordRequest.builder()
+                                               .userPoolId(userPoolId)     // Your user pool ID
+                                               .username(userId)         // The username
+                                               .password(newPassword)          // New password
+                                               .permanent(forceChangePassword != null && forceChangePassword)                      // Set to true to avoid requiring password change on next login
+                                               .build();
+
+
+
+      try {
+         cognitoClient.adminSetUserPassword(request);
+         Log.infof("Admin reset password for userId:%s in realm: %s  successfully", userId, realm);
+      } catch (CognitoIdentityProviderException e) {
+         Log.warnf("Admin password for userId:%s in realm: %s reset failed:%s " , userId, realm, e.awsErrorDetails().errorMessage());
+         throw new SecurityException(String.format("Failed to reset admin password for userId:%s in realm: %s:%s ", userId, realm, e.awsErrorDetails().errorMessage()), e);
+      }
+
+      ocred.get().setPasswordHash(EncryptionUtils.hashPassword(newPassword));
+      ocred.get().setForceChangePassword(forceChangePassword);
+
+      credentialRepo.save(ocred.get());
+   }
+
+
+   @Override
+   public void createUser (String realm, String userId, String password, String username, Set<String> roles, DomainContext domainContext) throws SecurityException {
+       createUser(realm, userId, password, null, username, roles, domainContext);
+   }
+
     @Override
-    public void createUser (String realm, String userId, String password, String username, Set<String> roles, DomainContext domainContext) throws SecurityException {
+    public void createUser (String realm, String userId, String password, Boolean forceChangePassword, String username, Set<String> roles, DomainContext domainContext) throws SecurityException {
         Log.infof("Creating userId:%s, username:%s, roles:%s, domainContext:%s in realm:%s", userId, username, roles, domainContext, realm);
 
         if (!ValidateUtils.isValidEmailAddress(userId)) {
@@ -279,7 +321,7 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
                       .userPoolId(userPoolId)
                       .username(userId) // because cognito could be configured to only accept email addresses as the username not a guid
                       .temporaryPassword(password)
-                      .messageAction(MessageActionType.SUPPRESS) // Suppress welcome email
+                      .messageAction(forceChangePassword == null ? MessageActionType.SUPPRESS : MessageActionType.RESEND) // Suppress welcome email
                       .userAttributes(
                          AttributeType.builder()
                             .name("email")
@@ -307,7 +349,7 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
                       .userPoolId(userPoolId)
                       .username(userId)
                       .password(password)
-                      .permanent(true)
+                      .permanent(forceChangePassword == null ? true : false)
                       .build();
 
                 AdminSetUserPasswordResponse pwResponse = cognitoClient.adminSetUserPassword(passwordRequest);
@@ -580,12 +622,16 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
         DomainContext domainContext
     ) throws SecurityException {
 
-        createUser( userProfileRepo.getSecurityContextRealmId(),  userId, password, username, roles, domainContext);
+        createUser( securityUtils.getSystemRealm(),  userId, password, username, roles, domainContext);
     }
 
+   @Override
+   public void createUser (String userId, String password, Boolean forceChangePassword, String username, Set<String> roles, DomainContext domainContext) throws SecurityException {
+      createUser( securityUtils.getSystemRealm(),  userId, password, forceChangePassword, username, roles, domainContext);
+   }
 
 
-    @Override
+   @Override
     public void assignRoles(String username, Set<String> roles)
         throws SecurityException {
         try {
@@ -647,23 +693,5 @@ public class CognitoAuthProvider implements AuthProvider, UserManagement {
         return getUserGroups(username);
     }
 
-    @Override
-    public void enableImpersonation (String userId, String impersonationScript, String realmFilter, String realmToEnableIn) {
-        Objects.requireNonNull(userId, "userId must be provided");
-        Objects.requireNonNull(impersonationScript, "impersonationScript must be provided");
-        Objects.requireNonNull(realmFilter, "realmFilter must be provided");
-        Objects.requireNonNull(realmToEnableIn, "realmToEnableIn must be provided");
 
-        MorphiaUtils.validateQueryString(realmFilter);
-        Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId, realmToEnableIn);
-        ocred.ifPresentOrElse(
-           credential -> {
-               credential.setImpersonateFilter(impersonationScript);
-               credential.setRealmFilter(realmFilter);
-               credentialRepo.save(credential);
-           },
-           () -> {
-               throw new SecurityException(String.format("UserId:%s not found in realm:%s ",userId, realmToEnableIn));
-           });
-    }
 }

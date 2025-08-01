@@ -62,7 +62,10 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
            userManager.removeUserWithUsername(testUsername);
         }
 
-         userManager.createUser(testUserId, testPassword, testUsername, Set.of("user", "admin"), DomainContext.builder()
+        assert(!userManager.usernameExists(testUsername));
+
+        if (!userManager.userIdExists(testUserId))
+            userManager.createUser(testUserId, testPassword, testUsername, Set.of("user", "admin"), DomainContext.builder()
                                                                                                     .accountId(testUtils.getTestAccountNumber())
                                                                                                     .defaultRealm(testUtils.getTestRealm())
                                                                                                     .tenantId(testUtils.getTestTenantId())
