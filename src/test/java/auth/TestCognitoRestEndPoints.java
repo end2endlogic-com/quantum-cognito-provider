@@ -1,6 +1,7 @@
 package auth;
 
 import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
+import com.e2eq.framework.model.persistent.security.DomainContext;
 import com.e2eq.framework.model.security.auth.AuthProviderFactory;
 import com.e2eq.framework.model.security.auth.UserManagement;
 import com.e2eq.framework.rest.models.AuthRequest;
@@ -17,6 +18,8 @@ import org.checkerframework.checker.units.qual.C;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+
+import java.util.Set;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.CoreMatchers.notNullValue;
@@ -35,6 +38,9 @@ public class TestCognitoRestEndPoints {
     @ConfigProperty(name = "test.userId")
     String testUserId;
 
+    @ConfigProperty(name = "test.username")
+    String testUsername;
+
     @ConfigProperty(name = "test.password")
     String testPassword;
 
@@ -52,7 +58,12 @@ public class TestCognitoRestEndPoints {
             UserManagement userManager = authProviderFactory.getUserManager();
 
             if( !userManager.userIdExists(testUtils.getTestRealm(), testUserId) ) {
-                throw new RuntimeException(String.format("Test userId:%s does not exist in cognito or credential database in realm:%s", testUserId, testUtils.getTestRealm()));
+               // create the user in cognito
+                userManager.createUser(testUtils.getTestRealm(), testUserId, testPassword, Boolean.FALSE, testUsername, Set.of("user"), DomainContext.builder()
+                                                                                                           .accountId(testUtils.getTestAccountNumber())
+                                                                                                           .orgRefName(testUtils.getTestOrgRefName())
+                                                                                                           .defaultRealm(testUtils.getTestRealm())
+                                                                                                           .tenantId(testUtils.getTestTenantId()).build());
             }
 
 
@@ -104,7 +115,7 @@ public class TestCognitoRestEndPoints {
 
             AuthResponse response = given()
                                        .contentType(ContentType.JSON)
-                                       .queryParam("realm", testUtils.getTestRealm()) // login take realm as parameter
+                                       .header("X-Realm", testUtils.getTestRealm())
                                        .body(value)
                                        .when()
                                        .post("/security/login")

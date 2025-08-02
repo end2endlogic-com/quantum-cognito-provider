@@ -65,7 +65,7 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
         assert(!userManager.usernameExists(testUsername));
 
         if (!userManager.userIdExists(testUserId))
-            userManager.createUser(testUserId, testPassword, testUsername, Set.of("user", "admin"), DomainContext.builder()
+            userManager.createUser(testUserId, testPassword, Boolean.FALSE, testUsername, Set.of("user", "admin"), DomainContext.builder()
                                                                                                     .accountId(testUtils.getTestAccountNumber())
                                                                                                     .defaultRealm(testUtils.getTestRealm())
                                                                                                     .tenantId(testUtils.getTestTenantId())
@@ -131,7 +131,7 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
                                                 .accountId(testUtils.getTestAccountNumber())
                                                 .tenantId(testUtils.getTestTenantId())
                                                 .build();
-               userManager.createUser(testUserId, testPassword, testUsername, Set.of("user", "admin"), domainContext);
+               userManager.createUser(testUserId, testPassword, Boolean.FALSE, testUsername, Set.of("user", "admin"), domainContext);
                Assert.assertTrue(userManager.usernameExists(testUsername));
             }
 
