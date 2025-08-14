@@ -44,6 +44,41 @@ import software.amazon.awssdk.services.cognitoidentityprovider.model.*;
 @ApplicationScoped
 public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvider, UserManagement {
 
+    private void enhanceLoginPositiveResponse(Object positiveResponse, String realmHint) {
+        if (positiveResponse == null) return;
+        try {
+            // Resolve realm to set
+            String resolvedRealm = (realmHint != null && !realmHint.isBlank()) ? realmHint : defaultRealm;
+
+            // Try setRealm(String)
+            try {
+                java.lang.reflect.Method setRealm = positiveResponse.getClass().getMethod("setRealm", String.class);
+                setRealm.invoke(positiveResponse, resolvedRealm);
+            } catch (NoSuchMethodException ignored) {
+                // ignore if method not present
+            }
+
+            // Try setMongodburl(String) and setMongoDbUrl(String) variants
+            boolean mongoSet = false;
+            try {
+                java.lang.reflect.Method setMongodburl = positiveResponse.getClass().getMethod("setMongodburl", String.class);
+                setMongodburl.invoke(positiveResponse, mongodbConnectionString);
+                mongoSet = true;
+            } catch (NoSuchMethodException ignored) {
+            }
+            if (!mongoSet) {
+                try {
+                    java.lang.reflect.Method setMongoDbUrl = positiveResponse.getClass().getMethod("setMongoDbUrl", String.class);
+                    setMongoDbUrl.invoke(positiveResponse, mongodbConnectionString);
+                } catch (NoSuchMethodException ignored) {
+                }
+            }
+        } catch (Exception e) {
+            // Do not fail login if enhancement fails, just log
+            Log.debug("Could not enhance LoginPositiveResponse with mongodburl/realm: " + e.getMessage());
+        }
+    }
+
     @Inject
     CredentialRepo credentialRepo;
 
@@ -67,6 +102,13 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
     @ConfigProperty(name = "com.b2bi.jwt.duration")
     Long durationInSeconds;
+
+    // Additional configuration for enhancing LoginResponse
+    @ConfigProperty(name = "quarkus.mongodb.connection-string", defaultValue = "")
+    String mongodbConnectionString;
+
+    @ConfigProperty(name = "quantum.realmConfig.defaultRealm", defaultValue = "system-com")
+    String defaultRealm;
 
     private final CognitoIdentityProviderClient cognitoClient;
    @Inject
@@ -124,18 +166,21 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
             SecurityIdentity identity = buildIdentity(ocred.get().getUserId(), groups);
             securityIdentityAssociation.setIdentity(identity);
 
-            return new LoginResponse(
-                true,
-                new LoginPositiveResponse(
+            LoginPositiveResponse positive = new LoginPositiveResponse(
                     userId,
                     identity,
                     groups,
                     accessToken,
                     refreshToken,
                     new Date(
-                        TokenUtils.currentTimeInSecs() + durationInSeconds
-                    ).getTime()
-                )
+                            TokenUtils.currentTimeInSecs() + durationInSeconds
+                    ).getTime(),
+                    mongodbConnectionString,
+                    (realm != null && !realm.isBlank()) ? realm : defaultRealm
+            );
+            return new LoginResponse(
+                true,
+                positive
             );
         } catch (NotAuthorizedException e) {
             Log.error("Authentication failed for userId: " + userId, e);
@@ -185,18 +230,21 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
         SecurityIdentity identity = validateAccessToken(newIdToken);
 
+        LoginPositiveResponse positive = new LoginPositiveResponse(
+            username,
+            identity,
+            groups,
+            newIdToken,
+            newRefreshToken,
+            new Date(
+                TokenUtils.currentTimeInSecs() + durationInSeconds
+            ).getTime(),
+            mongodbConnectionString,
+            defaultRealm
+        );
         return new LoginResponse(
             true,
-            new LoginPositiveResponse(
-                username,
-                identity,
-                groups,
-                newIdToken,
-                newRefreshToken,
-                new Date(
-                    TokenUtils.currentTimeInSecs() + durationInSeconds
-                ).getTime()
-            )
+            positive
         );
     }
 
@@ -329,6 +377,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
 
        Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId( userId, realm, true);
+       CredentialUserIdPassword credential;
        if (ocred.isPresent()) {
           Log.debug("User already exists in the credentials database, checking configuration");
           if (!ocred.get().getUsername().equals(username) && ocred.get().getPasswordHash().equals(EncryptionUtils.hashPassword(password)) &&
@@ -337,9 +386,10 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
           } else {
              Log.warnf("User %s already exists in realm: %s with same configuration, skipping  credential creation", userId, credentialRepo.getDatabaseName());
           }
+          credential = ocred.get();
        } else {
           Log.infof("Creating userId:%s in the credentialUserIdPassword collection: username:%s, roles:%s, domainContext:%s in realm:%s", userId, username, roles, domainContext, realm);
-          CredentialUserIdPassword credential = new CredentialUserIdPassword();
+          credential = new CredentialUserIdPassword();
           credential.setRefName(username);
           credential.setUserId(userId);
           credential.setUsername(username);
@@ -390,6 +440,8 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
                    throw new SecurityException(String.format(
                       "Failed to resolve cognito subject from cognito client response using email as the userId, create userId:%s in userPool:%s response we need this to map the username:", userId, userPoolId));
                 }
+                credential.setSubject(subject);
+                credentialRepo.save(realm, credential);
 
                 Log.infof("User Created in cognito with emailAddress/userId:%s username:%s ", userId, response.user().username(), subject);
                 // username = response.user().username(); while this would seem intuitive we want the userName to match the subject not the use name which can change
