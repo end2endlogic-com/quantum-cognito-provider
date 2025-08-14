@@ -141,6 +141,10 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
             throw new WebApplicationException(String.format("user with userId:%s could not be found in the credentials collection in realm:%s", userId, credentialRepo.getDatabaseName()));
         }
 
+        if (Log.isDebugEnabled()) {
+           Log.debugf("Login request for user: %s, realm: %s with username:%s using clientId:%s, and userpoolId:%s", userId, realm, ocred.get().getUsername(), clientId, userPoolId);
+        }
+
         AdminInitiateAuthRequest authRequest =
             AdminInitiateAuthRequest.builder()
                 .userPoolId(userPoolId)
