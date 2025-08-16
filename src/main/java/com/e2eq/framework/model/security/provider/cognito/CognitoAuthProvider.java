@@ -1,6 +1,7 @@
 package com.e2eq.framework.model.security.provider.cognito;
 
 import com.e2eq.framework.exceptions.ReferentialIntegrityViolationException;
+import com.e2eq.framework.model.persistent.base.DataDomain;
 import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
 import com.e2eq.framework.model.persistent.morphia.MorphiaUtils;
 import com.e2eq.framework.model.persistent.morphia.UserProfileRepo;
@@ -397,14 +398,35 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
    }
 
 
+
    @Override
    public void createUser (String realm, String userId, String password, String username, Set<String> roles, DomainContext domainContext) throws SecurityException {
-       createUser(realm, userId, password, null, username, roles, domainContext);
+      createUser(realm, userId, password, null, username, roles, domainContext);
+   }
+
+   @Override
+   public void createUser (String realm, String userId, String password, Boolean forceChangePassword, String username, Set<String> roles, DomainContext domainContext) throws SecurityException {
+       createUser(realm, userId, password, forceChangePassword, username, roles, domainContext, null);
+   }
+
+   @Override
+   public void createUser (String userId, String password, String username, Set<String> roles, DomainContext domainContext, DataDomain dataDomain) throws SecurityException {
+           createUser(securityUtils.getSystemRealm(), userId, password, null, username, roles, domainContext, dataDomain);
+   }
+
+   @Override
+   public void createUser (String userId, String password, Boolean forceChangePassword, String username, Set<String> roles, DomainContext domainContext, DataDomain dataDomain) throws SecurityException {
+        createUser(securityUtils.getSystemRealm(), userId, password, forceChangePassword, username, roles, domainContext, dataDomain);
+   }
+
+   @Override
+   public void createUser (String realm, String userId, String password, String username, Set<String> roles, DomainContext domainContext, DataDomain dataDomain) throws SecurityException {
+                   createUser(securityUtils.getSystemRealm(), userId, password, null, username, roles, domainContext, dataDomain);
    }
 
    @Override
    public void createUser (String realm, String userId, String password, Boolean forceChangePassword,
-                        String username, Set<String> roles, DomainContext domainContext) {
+                        String username, Set<String> roles, DomainContext domainContext, DataDomain dataDomain) {
      requireValidEmail(userId);
      roles = (roles != null) ? roles : Collections.emptySet();
 
@@ -438,6 +460,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
              cred.setDomainContext(domainContext);
              cred.setRoles(roles.toArray(new String[0]));
              cred.setLastUpdate(new Date());
+             cred.setDataDomain(dataDomain);
              credentialRepo.save(realm, cred);
          }
 
@@ -491,6 +514,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
          cred.setDomainContext(domainContext);
          cred.setRoles(roles.toArray(new String[0]));
          cred.setLastUpdate(new Date());
+         cred.setDataDomain(dataDomain);
          credentialRepo.save(realm, cred);
      }
 
