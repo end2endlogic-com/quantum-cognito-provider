@@ -105,7 +105,7 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
                }
                credentialRepo.delete(ocred.get());
             }
-            if (userManager.usernameExists(testUsername)) {
+            if (userManager.userIdExists(testUserId)) {
                // user exists in cognito but does exist in the credentials database
                // create it in the credential database
                CredentialUserIdPassword cred = CredentialUserIdPassword.builder()
