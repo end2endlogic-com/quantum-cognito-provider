@@ -33,11 +33,8 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
    @Inject
    AuthProviderFactory authProviderFactory;
 
-   @ConfigProperty(name = "test.userId")
+   @ConfigProperty(name = "quantum.realmConfig.testUserId")
    String testUserId;
-
-   @ConfigProperty(name = "test.username")
-   String testUsername;
 
    @ConfigProperty(name = "test.password")
    String testPassword;
@@ -58,20 +55,18 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
       UserManagement userManager = authProviderFactory.getUserManager();
 
       try (final SecuritySession s = new SecuritySession(pContext, rContext)) {
-        if (userManager.usernameExists(testUsername)) {
-           userManager.removeUserWithUsername(testUsername);
-        }
+         if (userManager.userIdExists(testUserId)) {
+            userManager.removeUserWithUserId(testUserId);
+         }
 
-        assert(!userManager.usernameExists(testUsername));
+         userManager.createUser(testUserId, testPassword, Boolean.FALSE, Set.of("user"), DomainContext.builder()
+                                                                                            .accountId(testUtils.getTestAccountNumber())
+                                                                                            .defaultRealm(testUtils.getTestRealm())
+                                                                                            .tenantId(testUtils.getTestTenantId())
+                                                                                            .orgRefName(testUtils.getTestOrgRefName())
+                                                                                            .accountId(testUtils.getTestAccountNumber())
+                                                                                            .build());
 
-        if (!userManager.userIdExists(testUserId))
-            userManager.createUser(testUserId, testPassword, Boolean.FALSE, testUsername, Set.of("user", "admin"), DomainContext.builder()
-                                                                                                    .accountId(testUtils.getTestAccountNumber())
-                                                                                                    .defaultRealm(testUtils.getTestRealm())
-                                                                                                    .tenantId(testUtils.getTestTenantId())
-                                                                                                    .orgRefName(testUtils.getTestOrgRefName())
-                                                                                                    .accountId(testUtils.getTestAccountNumber())
-                                                                                                    .build());
       }
    }
 
@@ -79,7 +74,7 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
    public void testGetRoles() {
       if (authProvider.equals("cognito")) {
          UserManagement userManager = authProviderFactory.getUserManager();
-         Set<String> roles = userManager.getUserRoles("56d9c248-982c-4080-9817-ffe09d39ecc9" );
+         Set<String> roles = userManager.getUserRolesForSubject("56d9c248-982c-4080-9817-ffe09d39ecc9" );
          Assert.assertTrue(roles.contains("user"));
       }
    }
@@ -96,21 +91,30 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
             Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(testUserId);
             if (ocred.isPresent()) {
                credentialRepo.delete(ocred.get());
-               if (!userManager.removeUserWithUsername(ocred.get().getUsername())) {
-                  throw new IllegalStateException(String.format("User not removed in cognito usr name:%s with userid:%s in credentials collection in  realm: %s may be stale", ocred.get().getUsername(),ocred.get().getUserId(), credentialRepo.getDatabaseName()));
+               if (!userManager.removeUserWithUserId(testUserId)) {
+                  throw new IllegalStateException(String.format("User not removed in cognito  with userid:%s in credentials collection in  realm: %s may be stale", ocred.get().getUserId(), credentialRepo.getDatabaseName()));
                }
-               boolean removed = userManager.removeUserWithUsername(ocred.get().getUsername());
+               boolean removed = userManager.removeUserWithSubject(ocred.get().getSubject());
                if (!removed) {
-                  Log.warnf("User not removed could not find userName:%s in credentials collection in  realm: %s: ", ocred.get().getUsername(), credentialRepo.getDatabaseName());
+                  Log.warnf("User not removed could not find userName:%s in credentials collection in  realm: %s: ", ocred.get().getSubject(), credentialRepo.getDatabaseName());
                }
                credentialRepo.delete(ocred.get());
             }
+
+            DomainContext domainContext = DomainContext.builder()
+                                             .orgRefName(testUtils.getTestOrgRefName())
+                                             .defaultRealm(testUtils.getTestRealm())
+                                             .accountId(testUtils.getTestAccountNumber())
+                                             .tenantId(testUtils.getTestTenantId())
+                                             .build();
+
+            String subject = userManager.createUser(testUserId, testPassword, Boolean.FALSE,  Set.of("user", "admin"), domainContext);
             if (userManager.userIdExists(testUserId)) {
                // user exists in cognito but does exist in the credentials database
                // create it in the credential database
                CredentialUserIdPassword cred = CredentialUserIdPassword.builder()
-                                             .userId(testUserId)
-                                             .username(testUsername)
+                                                   .userId(testUserId)
+                                                  .subject(subject)
                                                   .passwordHash(EncryptionUtils.hashPassword(testPassword))
                                                   .domainContext (
                                                      DomainContext.builder()
@@ -125,24 +129,17 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
                                              .build();
                cred = credentialRepo.save(cred);
             } else {
-               DomainContext domainContext = DomainContext.builder()
-                                                .orgRefName(testUtils.getTestOrgRefName())
-                                                .defaultRealm(testUtils.getTestRealm())
-                                                .accountId(testUtils.getTestAccountNumber())
-                                                .tenantId(testUtils.getTestTenantId())
-                                                .build();
-               userManager.createUser(testUserId, testPassword, Boolean.FALSE, testUsername, Set.of("user", "admin"), domainContext);
-               Assert.assertTrue(userManager.usernameExists(testUsername));
+               Assert.assertTrue(userManager.userIdExists(testUserId));
             }
 
-            Set<String> roles = userManager.getUserRoles(testUsername);
+            Set<String> roles = userManager.getUserRolesForUserId(testUserId);
             Assert.assertTrue(roles.contains("user"));
             AuthProvider.LoginResponse response = authProvider.login(testUserId, testPassword);
             Assert.assertTrue(response.authenticated());
-            userManager.assignRoles(testUsername, Set.of("admin"));
-            Assert.assertTrue(userManager.getUserRoles(testUsername).contains("admin"));
-            userManager.removeRoles(testUsername, Set.of("admin", "user"));
-            Assert.assertFalse(userManager.getUserRoles(testUsername).contains("admin"));
+            userManager.assignRolesForUserId(testUserId, Set.of("admin"));
+            Assert.assertTrue(userManager.getUserRolesForUserId(testUserId).contains("admin"));
+            userManager.removeRolesForUserId(testUserId, Set.of("admin", "user"));
+            Assert.assertFalse(userManager.getUserRolesForUserId(testUserId).contains("admin"));
             //userManager.removeUser(testUserId);
             //Assert.assertFalse(userManager.userExists(testUserId));
          }
