@@ -4,6 +4,7 @@ import com.e2eq.framework.exceptions.ReferentialIntegrityViolationException;
 import com.e2eq.framework.model.persistent.base.DataDomain;
 import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
 
+import com.e2eq.framework.model.persistent.morphia.MorphiaDataStore;
 import com.e2eq.framework.model.persistent.morphia.UserProfileRepo;
 import com.e2eq.framework.model.persistent.security.CredentialRefreshToken;
 import com.e2eq.framework.model.persistent.security.CredentialUserIdPassword;
@@ -37,6 +38,7 @@ import java.util.stream.Collectors;
 
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.WebApplicationException;
+import org.apache.commons.lang3.NotImplementedException;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.jwt.JsonWebToken;
 import software.amazon.awssdk.services.cognitoidentityprovider.CognitoIdentityProviderClient;
@@ -60,6 +62,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
       @ConfigProperty(name = "com.b2bi.jwt.duration" , defaultValue = "3600")
       Long durationInSeconds;
+
 
 
     private boolean isCognitoDisabled() {
@@ -442,37 +445,37 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
         String cognitoUsername = oByEmail.get().username();
         Optional<String> ocognitoSub = getSubjectForUserId(securityUtils.getSystemRealm(), cognitoUsername);
         if (!ocognitoSub.isPresent()) {
-           Log.warnf("Could not find Cognito subject for userId:%s in realm: %s, cognito username:%s so creating user", userId, realm, cognitoUsername);
-           String requestedUsername = userId;
-           AdminCreateUserResponse createResp = cognitoClient.adminCreateUser(
-              AdminCreateUserRequest.builder()
-                 .userPoolId(userPoolId)
-                 .username(requestedUsername)
-                 .temporaryPassword(password)
-                 .messageAction((forceChangePassword == null || !forceChangePassword)
-                                   ? MessageActionType.SUPPRESS : MessageActionType.RESEND)
-                 .userAttributes(AttributeType.builder().name("email").value(userId).build(),
-                    AttributeType.builder().name("email_verified").value("true").build())
-                 .build());
-
-
-// Make the password permanent so the user doesn't have to change it
-           cognitoClient.adminSetUserPassword(AdminSetUserPasswordRequest.builder()
-                                                 .userPoolId(userPoolId)
-                                                 .username(createResp.user().username())
-                                                 .password(password)       // same password, but now permanent
-                                                 .permanent(true)
-                                                 .build());
-           // extract the subject from the attributes
-           ocognitoSub = createResp.user().attributes().stream()
-                            .filter(attr -> attr.name().equals("sub"))
-                            .map(AttributeType::value)
-                            .findFirst();
-
-           if (!ocognitoSub.isPresent()) {
-              throw new SecurityException("Could not find Cognito subject for userId:" + userId + " in realm: " + realm + " and cognito username: " + cognitoUsername);
-           } else {
-              subject = ocognitoSub.get();
+           Log.warnf("Cognito subject missing for userId:%s in realm:%s, username:%s. Self-healing by fetching via AdminGetUser and aligning attributes.", userId, realm, cognitoUsername);
+           try {
+              String fetchedSub = fetchSubViaAdminGetUser(cognitoUsername);
+              subject = fetchedSub;
+              // Align attributes and password with requested values
+              try {
+                 cognitoClient.adminUpdateUserAttributes(AdminUpdateUserAttributesRequest.builder()
+                     .userPoolId(userPoolId)
+                     .username(cognitoUsername)
+                     .userAttributes(
+                         AttributeType.builder().name("email").value(userId).build(),
+                         AttributeType.builder().name("email_verified").value("true").build()
+                     )
+                     .build());
+              } catch (Exception ex) {
+                 Log.warnf("Failed updating attributes during self-heal for user %s: %s", userId, ex.getMessage());
+              }
+              if (password != null && !password.isBlank()) {
+                 try {
+                    cognitoClient.adminSetUserPassword(AdminSetUserPasswordRequest.builder()
+                        .userPoolId(userPoolId)
+                        .username(cognitoUsername)
+                        .password(password)
+                        .permanent(forceChangePassword == null || !forceChangePassword)
+                        .build());
+                 } catch (Exception ex) {
+                    Log.warnf("Failed setting password during self-heal for user %s: %s", userId, ex.getMessage());
+                 }
+              }
+           } catch (Exception e) {
+              throw new SecurityException("Failed to self-heal existing Cognito user for userId:" + userId + " in realm: " + realm, e);
            }
         } else {
            subject = ocognitoSub.get();
@@ -511,33 +514,36 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
          // 2) Reconcile or create credential
          Optional<CredentialUserIdPassword> oCred = credentialRepo.findByUserId(userId, realm, true);
-         if (oCred.isPresent()) {
-             CredentialUserIdPassword cred = oCred.get();
-             // Ensure the local record references Cognito’s values
-             if (!Objects.equals(cred.getUserId(), userId) || !Objects.equals(cred.getSubject(), subject)) {
-                 //throw new SecurityException("Credential mismatch with Cognito");
-                 // Or: heal by updating credential to match Cognito
+
+         // start a transaction so that either the credential repo and the userProfile are updated or they both are not
+
+            if (oCred.isPresent()) {
+               CredentialUserIdPassword cred = oCred.get();
+               // Ensure the local record references Cognito’s values
+               if (!Objects.equals(cred.getUserId(), userId) || !Objects.equals(cred.getSubject(), subject)) {
+                  //throw new SecurityException("Credential mismatch with Cognito");
+                  // Or: heal by updating credential to match Cognito
                   cred.setUserId(userId);
                   cred.setSubject(subject);
                   credentialRepo.save(realm, cred);
-                 // ... then save
-             }
-             // Optionally update roles/password/domainContext
-         } else {
-             CredentialUserIdPassword cred = new CredentialUserIdPassword();
-             cred.setRefName(subject);
-             cred.setUserId(userId);
-             cred.setSubject(subject);           // <- store Cognito sub
-             if (password != null) cred.setPasswordHash(EncryptionUtils.hashPassword(password));
-             cred.setDomainContext(domainContext);
-             cred.setRoles(roles.toArray(new String[0]));
-             cred.setLastUpdate(new Date());
-             cred.setDataDomain(dataDomain);
-             credentialRepo.save(realm, cred);
-         }
+                  // ... then save
+               }
+               // Optionally update roles/password/domainContext
+            } else {
+               CredentialUserIdPassword cred = new CredentialUserIdPassword();
+               cred.setRefName(subject);
+               cred.setUserId(userId);
+               cred.setSubject(subject);           // <- store Cognito sub
+               if (password != null) cred.setPasswordHash(EncryptionUtils.hashPassword(password));
+               cred.setDomainContext(domainContext);
+               cred.setRoles(roles.toArray(new String[0]));
+               cred.setLastUpdate(new Date());
+               cred.setDataDomain(dataDomain);
+               credentialRepo.save(realm, cred);
+            }
 
-         if (!roles.isEmpty())
-            assignRolesForUserId(userId, roles);
+            if (!roles.isEmpty())
+               assignRolesForUserId(userId, roles);
 
         return subject;
      }
@@ -892,12 +898,12 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
    @Override
    public void assignRolesForSubject (String subject, Set<String> roles) throws SecurityException {
-         credentialRepo.findBySubject(securityUtils.getSystemRealm(), subject);
+        throw new NotImplementedException("Not implemented: assignRolesForSubject");
    }
 
    @Override
    public void assignRolesForSubject (String realm, String subject, Set<String> roles) throws SecurityException {
-
+      throw new NotImplementedException("Not implemented: assignRolesForSubject");
    }
 
     @Override

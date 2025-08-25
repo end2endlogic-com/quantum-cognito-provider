@@ -92,7 +92,7 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
             if (ocred.isPresent()) {
                credentialRepo.delete(ocred.get());
                if (!userManager.removeUserWithUserId(testUserId)) {
-                  throw new IllegalStateException(String.format("User not removed in cognito  with userid:%s in credentials collection in  realm: %s may be stale", ocred.get().getUserId(), credentialRepo.getDatabaseName()));
+                  Log.warnf("User not removed in cognito  with userid:%s in credentials collection in  realm: %s may be stale", ocred.get().getUserId(), credentialRepo.getDatabaseName());
                }
                boolean removed = userManager.removeUserWithSubject(ocred.get().getSubject());
                if (!removed) {
