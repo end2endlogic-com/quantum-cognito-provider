@@ -349,9 +349,9 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
          if (getUserResponse.userStatus() != UserStatusType.CONFIRMED) {
             Log.warnf("User:%s has not in a confirmed state found state:%s", userId, getUserResponse.userStatus().toString());
          }
-         if (!getUserResponse.username().equals(ocred.get().getUserId())) {
-            Log.errorf("Cognito username:%s does not match userId from database:%s", getUserResponse.username(), ocred.get().getUserId());
-            throw new IllegalStateException(String.format("Cognito username does not match subject from database, credentialUserName:%s, cognitoUserName:%s for userId:%s correct them to match",getUserResponse.username(), ocred.get().getUserId(), userId));
+         if (!getUserResponse.username().equals(ocred.get().getSubject() )) {
+            Log.errorf("Cognito username:%s does not match subject from database:%s", getUserResponse.username(), ocred.get().getSubject());
+            throw new IllegalStateException(String.format("Cognito username does not match subject from database, CognitoUserName:%s, credentialSubject:%s for credential userId:%s correct them to match",getUserResponse.username(), ocred.get().getSubject(), userId));
          }
          if (getUserResponse.getValueForField("sub", String.class).orElse("Not provided").equals(ocred.get().getSubject())){
             Log.warnf("sub field in cognito subject:%s does not match credential record username:%s", getUserResponse.getValueForField("sub", String.class).orElse("Not Provided"), ocred.get().getSubject());
