@@ -487,17 +487,18 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
               .userPoolId(userPoolId)
               .username(userId)
               .temporaryPassword(password)
-              .messageAction((forceChangePassword == null ||!forceChangePassword)
-                                ? MessageActionType.SUPPRESS : MessageActionType.RESEND)
+              .messageAction( MessageActionType.SUPPRESS) // Suppress sending the welcome email
               .userAttributes(AttributeType.builder().name("email").value(userId).build(),
                     AttributeType.builder().name("email_verified").value("true").build())
               .build());
 
+        boolean permanent = forceChangePassword == null || !forceChangePassword;
+
         cognitoClient.adminSetUserPassword(AdminSetUserPasswordRequest.builder()
                                               .userPoolId(userPoolId)
                                               .username(createResp.user().username())
-                                              .password(password)       // same password, but now permanent
-                                              .permanent(true)
+                                              .password(password)
+                                              .permanent(permanent)
                                               .build());
 
         Optional<String> osub = createResp.user().attributes().stream()
