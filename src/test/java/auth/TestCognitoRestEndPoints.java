@@ -1,20 +1,16 @@
 package auth;
 
+import com.e2eq.framework.exceptions.DatabaseMigrationException;
 import com.e2eq.framework.exceptions.ReferentialIntegrityViolationException;
+import com.e2eq.framework.model.auth.AuthProviderFactory;
+import com.e2eq.framework.model.auth.UserManagement;
 import com.e2eq.framework.model.persistent.base.DataDomain;
 import com.e2eq.framework.model.persistent.migration.base.MigrationService;
 import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
-import com.e2eq.framework.model.persistent.morphia.UserProfileRepo;
-import com.e2eq.framework.model.persistent.security.CredentialUserIdPassword;
-import com.e2eq.framework.model.persistent.security.DomainContext;
-import com.e2eq.framework.model.persistent.security.UserProfile;
-import com.e2eq.framework.model.security.auth.AuthProviderFactory;
-import com.e2eq.framework.model.security.auth.UserManagement;
-import com.e2eq.framework.model.securityrules.SecuritySession;
-import com.e2eq.framework.rest.exceptions.DatabaseMigrationException;
+import com.e2eq.framework.model.security.DomainContext;
 import com.e2eq.framework.rest.models.AuthRequest;
 import com.e2eq.framework.rest.models.AuthResponse;
-import com.e2eq.framework.util.EncryptionUtils;
+import com.e2eq.framework.securityrules.SecuritySession;
 import com.e2eq.framework.util.TestUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,16 +20,9 @@ import io.restassured.http.ContentType;
 import io.smallrye.mutiny.Multi;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
-import org.checkerframework.checker.units.qual.C;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-
-import java.util.Date;
-import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
-
 import static com.ibm.icu.impl.Assert.fail;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.CoreMatchers.notNullValue;

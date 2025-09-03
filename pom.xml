@@ -17,6 +17,7 @@
 
   <properties>
       <lombok.version>1.18.32</lombok.version>
+      <quantum.version>1.2.2-SNAPSHOT</quantum.version>
   </properties>
 
 
@@ -50,9 +51,19 @@
 
     <dependency>
         <groupId>com.end2endlogic</groupId>
-        <artifactId>quantum-framework</artifactId>
-        <version>1.2.2-SNAPSHOT</version>
+        <artifactId>quantum-models</artifactId>
+        <version>${quantum.version}</version>
       </dependency>
+        <dependency>
+            <groupId>com.end2endlogic</groupId>
+            <artifactId>quantum-morphia-repos</artifactId>
+            <version>${quantum.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.end2endlogic</groupId>
+            <artifactId>quantum-jwt-provider</artifactId>
+            <version>${quantum.version}</version>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-oidc</artifactId>
@@ -110,10 +121,6 @@
                         <path>
                             <groupId>io.quarkus</groupId>
                             <artifactId>quarkus-hibernate-validator</artifactId>
-                        </path>
-                        <path>
-                            <groupId>io.quarkus</groupId>
-                            <artifactId>quarkus-scheduler</artifactId>
                         </path>
                         <path>
                             <groupId>com.end2endlogic</groupId>

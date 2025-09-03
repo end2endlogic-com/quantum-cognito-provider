@@ -1,14 +1,15 @@
 package auth;
 
 import com.e2eq.framework.exceptions.ReferentialIntegrityViolationException;
+import com.e2eq.framework.model.auth.AuthProvider;
+import com.e2eq.framework.model.auth.AuthProviderFactory;
+import com.e2eq.framework.model.auth.UserManagement;
 import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
 import com.e2eq.framework.model.persistent.morphia.UserProfileRepo;
-import com.e2eq.framework.model.persistent.security.CredentialUserIdPassword;
-import com.e2eq.framework.model.persistent.security.DomainContext;
-import com.e2eq.framework.model.security.auth.AuthProvider;
-import com.e2eq.framework.model.security.auth.AuthProviderFactory;
-import com.e2eq.framework.model.security.auth.UserManagement;
-import com.e2eq.framework.model.securityrules.SecuritySession;
+
+import com.e2eq.framework.model.security.CredentialUserIdPassword;
+import com.e2eq.framework.model.security.DomainContext;
+import com.e2eq.framework.securityrules.SecuritySession;
 import com.e2eq.framework.util.EncryptionUtils;
 import com.e2eq.framework.util.TestUtils;
 import io.quarkus.logging.Log;
@@ -21,9 +22,7 @@ import org.wildfly.common.Assert;
 import java.util.Date;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.fail;
 
 @QuarkusTest
 public class TestCognitoAuthProvider extends BaseRepoTest{

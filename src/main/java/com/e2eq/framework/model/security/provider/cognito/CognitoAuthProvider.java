@@ -4,18 +4,19 @@ import com.e2eq.framework.exceptions.ReferentialIntegrityViolationException;
 import com.e2eq.framework.model.persistent.base.DataDomain;
 import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
 
-import com.e2eq.framework.model.persistent.morphia.MorphiaDataStore;
+import com.e2eq.framework.model.auth.provider.jwtToken.TokenUtils;
 import com.e2eq.framework.model.persistent.morphia.UserProfileRepo;
-import com.e2eq.framework.model.persistent.security.CredentialRefreshToken;
-import com.e2eq.framework.model.persistent.security.CredentialUserIdPassword;
-import com.e2eq.framework.model.persistent.security.DomainContext;
-import com.e2eq.framework.model.security.auth.AuthProvider;
-import com.e2eq.framework.model.security.auth.UserManagement;
+import com.e2eq.framework.model.security.CredentialRefreshToken;
+import com.e2eq.framework.model.security.CredentialUserIdPassword;
+import com.e2eq.framework.model.security.DomainContext;
+import com.e2eq.framework.model.auth.AuthProvider;
+import com.e2eq.framework.model.auth.UserManagement;
 
-import com.e2eq.framework.model.security.auth.provider.jwtToken.BaseAuthProvider;
+
+import com.e2eq.framework.plugins.BaseAuthProvider;
 import com.e2eq.framework.util.EncryptionUtils;
-import com.e2eq.framework.util.SecurityUtils;
-import com.e2eq.framework.util.TokenUtils;
+import com.e2eq.framework.util.EnvConfigUtils;
+
 import com.e2eq.framework.util.ValidateUtils;
 import io.quarkus.logging.Log;
 import io.quarkus.security.identity.SecurityIdentity;
@@ -108,7 +109,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
    UserProfileRepo userProfileRepo;
 
    @Inject
-   SecurityUtils securityUtils;
+   EnvConfigUtils envConfigUtils;
 
     /**
      * Constructor for CognitoAuthProvider.
@@ -152,7 +153,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
     public LoginResponse login(String realm,  String userId, String password) {
         Optional<CredentialUserIdPassword> ocred;
         if (realm == null)
-            ocred = credentialRepo.findByUserId(userId,securityUtils.getSystemRealm(), true);
+            ocred = credentialRepo.findByUserId(userId, envConfigUtils.getSystemRealm(), true);
         else
             ocred = credentialRepo.findByUserId(userId, realm, true);
 
@@ -292,7 +293,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
     @Override
     public boolean subjectExists(String subject) {
-      return subjectExists(securityUtils.getSystemRealm(), subject);
+      return subjectExists(envConfigUtils.getSystemRealm(), subject);
     }
 
    @Override
@@ -372,13 +373,13 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
     @Override
     public boolean userIdExists(String userId) {
-         return userIdExists(securityUtils.getSystemRealm(), userId);
+         return userIdExists(envConfigUtils.getSystemRealm(), userId);
     }
 
 
    @Override
    public void changePassword(String userId, String oldPassword, String newPassword, Boolean forceChangePassword) {
-       changePassword(securityUtils.getSystemRealm(), userId, oldPassword, newPassword, forceChangePassword);
+       changePassword(envConfigUtils.getSystemRealm(), userId, oldPassword, newPassword, forceChangePassword);
    }
 
    @Override
@@ -424,12 +425,12 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
    @Override
    public String createUser (String userId, String password, String username, Set<String> roles, DomainContext domainContext, DataDomain dataDomain) throws SecurityException {
-           return createUser(securityUtils.getSystemRealm(), userId, password, null,  roles, domainContext, dataDomain);
+           return createUser(envConfigUtils.getSystemRealm(), userId, password, null,  roles, domainContext, dataDomain);
    }
 
    @Override
    public String createUser (String userId, String password, Boolean forceChangePassword,  Set<String> roles, DomainContext domainContext, DataDomain dataDomain) throws SecurityException {
-        return createUser(securityUtils.getSystemRealm(), userId, password, forceChangePassword, roles, domainContext, dataDomain);
+        return createUser(envConfigUtils.getSystemRealm(), userId, password, forceChangePassword, roles, domainContext, dataDomain);
    }
 
    @Override
@@ -443,7 +444,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
      Optional<UserType> oByEmail = retrieveUserId(userId);
      if (oByEmail.isPresent()) {
         String cognitoUsername = oByEmail.get().username();
-        Optional<String> ocognitoSub = getSubjectForUserId(securityUtils.getSystemRealm(), cognitoUsername);
+        Optional<String> ocognitoSub = getSubjectForUserId(envConfigUtils.getSystemRealm(), cognitoUsername);
         if (!ocognitoSub.isPresent()) {
            Log.warnf("Cognito subject missing for userId:%s in realm:%s, username:%s. Self-healing by fetching via AdminGetUser and aligning attributes.", userId, realm, cognitoUsername);
            try {
@@ -560,7 +561,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
          return true;
       }
 
-      Optional<CredentialUserIdPassword> ocred = credentialRepo.findBySubject(subject, securityUtils.getSystemRealm(), true);
+      Optional<CredentialUserIdPassword> ocred = credentialRepo.findBySubject(subject, envConfigUtils.getSystemRealm(), true);
       if (!ocred.isPresent()) {
          Log.debugf("No credential found for subject %s", subject);
          return false;
@@ -591,7 +592,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
     @Override
     public boolean removeUserWithUserId (String userId) throws ReferentialIntegrityViolationException {
-        return removeUserWithUserId(securityUtils.getSystemRealm(),userId);
+        return removeUserWithUserId(envConfigUtils.getSystemRealm(),userId);
     }
 
    @Override
@@ -804,17 +805,17 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
         DomainContext domainContext
     ) throws SecurityException {
 
-        return createUser( securityUtils.getSystemRealm(),  userId, password,  roles, domainContext);
+        return createUser( envConfigUtils.getSystemRealm(),  userId, password,  roles, domainContext);
     }
 
    @Override
    public String createUser (String userId, String password, Boolean forceChangePassword, Set<String> roles, DomainContext domainContext) throws SecurityException {
-      return createUser( securityUtils.getSystemRealm(),  userId, password, forceChangePassword,  roles, domainContext);
+      return createUser( envConfigUtils.getSystemRealm(),  userId, password, forceChangePassword,  roles, domainContext);
    }
 
    @Override
    public String createUser (String userId, String password, Set<String> roles, DomainContext domainContext, DataDomain dataDomain) throws SecurityException {
-      return createUser(securityUtils.getSystemRealm(),  userId, password, roles, domainContext, dataDomain);
+      return createUser(envConfigUtils.getSystemRealm(),  userId, password, roles, domainContext, dataDomain);
    }
 
 
@@ -934,14 +935,14 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
     @Override
     public Set<String> getUserRolesForUserId(String userId) throws SecurityException {
-        return getUserRolesForUserId(securityUtils.getSystemRealm(), userId);
+        return getUserRolesForUserId(envConfigUtils.getSystemRealm(), userId);
     }
 
    @Override
    public Set<String> getUserRolesForUserId (String realm, String userId) throws SecurityException {
       if (isCognitoDisabled()) {
          try {
-            Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId, securityUtils.getSystemRealm(), true);
+            Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId, envConfigUtils.getSystemRealm(), true);
             if (ocred.isPresent() && ocred.get().getRoles() != null) {
                return Arrays.stream(ocred.get().getRoles()).collect(Collectors.toSet());
             }
@@ -957,7 +958,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
    @Override
    public Set<String> getUserRolesForSubject (String subject) throws SecurityException {
-      return getUserRolesForSubject(securityUtils.getSystemRealm(), subject);
+      return getUserRolesForSubject(envConfigUtils.getSystemRealm(), subject);
    }
 
    @Override
@@ -968,7 +969,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
 
    private Set<String> getUserGroupsForUserId(String userId) {
-      return getUserGroupsForUserId(securityUtils.getSystemRealm(), userId);
+      return getUserGroupsForUserId(envConfigUtils.getSystemRealm(), userId);
    }
 
    private Set<String> getUserGroupsForUserId(String realm, String userId) {
@@ -1004,7 +1005,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
    }
 
    private Set<String> getUserGroupsForSubject(String subject) {
-      return getUserGroupsForSubject(securityUtils.getSystemRealm(), subject);
+      return getUserGroupsForSubject(envConfigUtils.getSystemRealm(), subject);
    }
 
    private Set<String> getUserGroupsForSubject(String realm, String subject) {
@@ -1076,7 +1077,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
    @Override
    public Optional<String> getSubjectForUserId (String userId) throws SecurityException {
-      return getSubjectForUserId(securityUtils.getSystemRealm(), userId);
+      return getSubjectForUserId(envConfigUtils.getSystemRealm(), userId);
    }
 
    @Override
@@ -1108,7 +1109,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
    @Override
    public Optional<String> getUserIdForSubject (String subject) throws SecurityException {
-      return getUserIdForSubject(securityUtils.getSystemRealm(), subject);
+      return getUserIdForSubject(envConfigUtils.getSystemRealm(), subject);
    }
 
    @Override
