@@ -97,13 +97,10 @@ public class TestCognitoRestEndPoints extends BaseRepoTest{
             // ensure the credentials exist in cognito and credential database
             UserManagement userManager = authProviderFactory.getUserManager();
 
-            if( !userManager.userIdExists(testUtils.getTestRealm(), testUserId) ) {
+            if( !userManager.userIdExists( testUserId) ) {
                // create the user in cognito
-                userManager.createUser(testUtils.getTestRealm(), testUserId, testPassword, Boolean.FALSE,  Set.of("user"), DomainContext.builder()
-                                                                                                           .accountId(testUtils.getTestAccountNumber())
-                                                                                                           .orgRefName(testUtils.getTestOrgRefName())
-                                                                                                           .defaultRealm(testUtils.getTestRealm())
-                                                                                                           .tenantId(testUtils.getTestTenantId()).build());
+                userManager.createUser(testUserId, testPassword, Boolean.FALSE,  Set.of("user"), DomainContext.builder()
+                                                                                                        .tenantId(testUtils.getTestTenantId()).build());
             }
 
 
