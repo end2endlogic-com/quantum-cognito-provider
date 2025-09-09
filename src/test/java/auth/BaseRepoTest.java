@@ -28,12 +28,7 @@ public class BaseRepoTest {
 
     @PostConstruct
     void init() {
-        // Ensure AWS region/profile for tests if not provided externally
-        setIfAbsent("AWS_REGION", "us-east-2");
-        setIfAbsent("aws.region", "us-east-2");
-        setIfAbsent("AWS_PROFILE", "movstia_dev");
-        setIfAbsent("aws.profile", "movstia_dev");
-        Log.infof("[Test Bootstrap] AWS region resolved to %s; profile resolved to %s",
+        Log.infof("[Test Bootstrap] AWS region  variable set to %s; AWS profile variable set to %s",
                 System.getProperty("aws.region", System.getProperty("AWS_REGION")),
                 System.getProperty("aws.profile", System.getProperty("AWS_PROFILE"))
         );
