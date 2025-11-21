@@ -13,6 +13,8 @@ import com.e2eq.framework.model.security.CredentialRefreshToken;
 import com.e2eq.framework.model.security.CredentialUserIdPassword;
 import com.e2eq.framework.model.security.DomainContext;
 import com.e2eq.framework.model.auth.AuthProvider;
+import com.e2eq.framework.model.auth.ProviderClaims;
+import com.e2eq.framework.model.auth.ClaimsAuthProvider;
 import com.e2eq.framework.model.auth.UserManagement;
 
 
@@ -54,7 +56,7 @@ import software.amazon.awssdk.services.cognitoidentityprovider.model.*;
  * It provides authentication and user management functionalities using AWS Cognito.
  */
 @ApplicationScoped
-public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvider, UserManagement {
+public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvider, UserManagement, ClaimsAuthProvider {
 
       @ConfigProperty(name = "auth.jwt.secret")
       String secretKey;
@@ -106,6 +108,13 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
    @Inject
    EnvConfigUtils envConfigUtils;
+
+   // Configurable role claim name (default: cognito:groups) and whether to union roles from scope
+   @ConfigProperty(name = "aws.cognito.roles.claim-name", defaultValue = "cognito:groups")
+   String rolesClaimName;
+
+   @ConfigProperty(name = "aws.cognito.roles.union-scope", defaultValue = "true")
+   boolean unionScopeRoles;
 
 
 
@@ -216,7 +225,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
                 groups.addAll(userGroupRoles);
             }
 
-            SecurityIdentity identity = buildIdentity(ocred.get().getUserId(), groups);
+            SecurityIdentity identity = buildIdentity(ocred.get().getUserId(), ocred.get().getSubject(), groups);
             securityIdentityAssociation.setIdentity(identity);
 
             // Build role provenance assignments
@@ -252,7 +261,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
                     .filter(Objects::nonNull)
                     .map(role -> {
                         EnumSet<RoleSource> src = EnumSet.noneOf(RoleSource.class);
-                        if (idpRoles.contains(role)) src.add(RoleSource.IDP);
+                        if (idpRoles.contains(role)) src.add(RoleSource.TOKEN);
                         if (credentialRoles.contains(role)) src.add(RoleSource.CREDENTIAL);
                         if (userGroupRoles.contains(role)) src.add(RoleSource.USERGROUP);
                         return new RoleAssignment(role, src);
@@ -366,7 +375,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
                 .filter(Objects::nonNull)
                 .map(role -> {
                     EnumSet<RoleSource> src = EnumSet.noneOf(RoleSource.class);
-                    if (idpRoles.contains(role)) src.add(RoleSource.IDP);
+                    if (idpRoles.contains(role)) src.add(RoleSource.TOKEN);
                     if (credentialRoles.contains(role)) src.add(RoleSource.CREDENTIAL);
                     if (userGroupRoles.contains(role)) src.add(RoleSource.USERGROUP);
                     return new RoleAssignment(role, src);
@@ -743,29 +752,41 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
 
 
-    private SecurityIdentity buildIdentity(String userId, Set<String> roles) {
-        if (Log.isDebugEnabled()) {
-            Log.debug("Building identity for userId: " + userId + " with roles: " + roles);
+    private SecurityIdentity buildIdentity(String userId, String subjectId, Set<String> roles) {
+        if (Log.isInfoEnabled()) {
+            Log.info("Building identity for userId: " + userId + " with roles: " + roles);
         }
-        QuarkusSecurityIdentity.Builder builder =
-            QuarkusSecurityIdentity.builder();
-        builder.setPrincipal(
-            new Principal() {
-                @Override
-                public String getName() {
-                    return userId;
-                }
+        QuarkusSecurityIdentity.Builder builder = QuarkusSecurityIdentity.builder();
+
+        // Principal must be non-null when anonymous=false (default).
+        // Standard practice here: use the subjectId (IdP subject) as the principal name.
+        builder.setPrincipal(new Principal() {
+            @Override
+            public String getName() {
+                return subjectId;
             }
-        );
+        });
+
+        // Roles
         roles.forEach(builder::addRole);
 
-        // Add any additional attributes needed for your application
+        // Attributes
         builder.addAttribute("token_type", "custom");
         builder.addAttribute("auth_time", System.currentTimeMillis());
+        builder.addAttribute("userId", userId);
+        if (subjectId != null) {
+            builder.addAttribute("subjectId", subjectId);
+        }
 
         return builder.build();
     }
 
+    /**
+     * Legacy compatibility path: validateAccessToken returns a SecurityIdentity directly.
+     * Note: The framework now prefers validateTokenToClaims(String) and will assemble the
+     * final SecurityIdentity (principal=userId) using IdentityAssembler. This method remains
+     * available during migration but may be removed in a future version.
+     */
     @Override
     public SecurityIdentity validateAccessToken(String token) {
         try {
@@ -790,7 +811,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
                 roles = getUserGroupsForSubject(subject);
             }
 
-            SecurityIdentity identity = buildIdentity(ocred.get().getUserId(), roles);
+            SecurityIdentity identity = buildIdentity(ocred.get().getUserId(), subject, roles);
             // Set the SecurityIdentity for the current request
             securityIdentityAssociation.setIdentity(identity);
             return identity;
@@ -798,6 +819,128 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
             Log.error("Token validation failed", e);
             throw new SecurityException("Invalid token");
         }
+    }
+
+    /**
+     * New canonical flow: validate the token and return raw ProviderClaims for framework assembly.
+     * The framework will build the SecurityIdentity (principal=userId) and merge roles from
+     * token + credential + groups. This provider focuses on parsing the IdP token only.
+     */
+    @Override
+    public ProviderClaims validateTokenToClaims(String token) {
+        try {
+            JsonWebToken webToken = jwtParser.parse(token);
+
+            // Subject
+            String subject = optionalClaim(webToken, "sub");
+            if (subject == null || subject.isBlank()) {
+                Log.warn("JWT missing 'sub' claim while building ProviderClaims");
+            }
+
+            // Roles
+            Set<String> tokenRoles = extractTokenRoles(webToken);
+
+            // Attributes
+            Map<String, Object> attributes = collectAttributes(webToken);
+            // Preserve issuer if present
+            String iss = optionalClaim(webToken, "iss");
+            if (iss != null) attributes.put("iss", iss);
+            // Canonical attribute for subject as seen by IdP
+            if (subject != null) attributes.put("idp-sub", subject);
+
+            // Useful usernames
+            String cognitoUsername = optionalClaim(webToken, "cognito:username");
+            String preferredUsername = optionalClaim(webToken, "preferred_username");
+            if (cognitoUsername != null) attributes.put("cognito:username", cognitoUsername);
+            if (preferredUsername != null) attributes.put("preferred_username", preferredUsername);
+
+            // Email if present
+            String email = optionalClaim(webToken, "email");
+            if (email != null) attributes.put("email", email);
+            if (email == null) {
+                Log.debug("JWT has no 'email' claim; continuing without it");
+            }
+
+            // Optional tenant/realm pass-throughs when present
+            String tenant = optionalClaim(webToken, "tenant");
+            if (tenant != null) attributes.put("tenant", tenant);
+            String realm = optionalClaim(webToken, "realm");
+            if (realm != null) attributes.put("realm", realm);
+
+            // Return as ProviderClaims (subject + tokenRoles + attributes)
+            ProviderClaims claims = ProviderClaims.builder(subject)
+                .tokenRoles(tokenRoles)
+                .attributes(attributes)
+                .build();
+            return claims;
+        } catch (Exception e) {
+            Log.error("Token parsing failed in validateTokenToClaims", e);
+            throw new SecurityException("Invalid token");
+        }
+    }
+
+    // ----- helpers for claims parsing -----
+    private Set<String> extractTokenRoles(JsonWebToken webToken) {
+        Set<String> roles = new LinkedHashSet<>();
+        try {
+            if (webToken.containsClaim(rolesClaimName)) {
+                // Commonly an array in Cognito (cognito:groups)
+                Object claim = webToken.getClaim(rolesClaimName);
+                if (claim instanceof Collection) {
+                    for (Object o : (Collection<?>) claim) {
+                        if (o != null) roles.add(String.valueOf(o));
+                    }
+                } else if (claim != null) {
+                    roles.add(String.valueOf(claim));
+                }
+            }
+        } catch (Throwable t) {
+            Log.warnf("Failed to read roles from claim '%s': %s", rolesClaimName, t.getMessage());
+        }
+
+        if (unionScopeRoles) {
+            try {
+                String scope = optionalClaim(webToken, "scope");
+                if (scope != null && !scope.isBlank()) {
+                    for (String s : scope.split("\\s+")) {
+                        if (!s.isBlank()) roles.add(s.trim());
+                    }
+                }
+            } catch (Throwable t) {
+                Log.debugf("Ignoring scope union due to error: %s", t.getMessage());
+            }
+        }
+        if (roles.isEmpty()) {
+            Log.warnf("No roles found in token. Checked claim '%s' and 'scope' union=%s", rolesClaimName, unionScopeRoles);
+        }
+        return roles;
+    }
+
+    private Map<String, Object> collectAttributes(JsonWebToken webToken) {
+        Map<String, Object> attrs = new LinkedHashMap<>();
+        // Commonly useful standard claims
+        putIfPresent(attrs, "aud", optionalClaim(webToken, "aud"));
+        putIfPresent(attrs, "exp", webToken.getClaim("exp"));
+        putIfPresent(attrs, "iat", webToken.getClaim("iat"));
+        // Pass through raw groups if present for consumers that want to see original array
+        if (webToken.containsClaim(rolesClaimName)) {
+            Object groups = webToken.getClaim(rolesClaimName);
+            if (groups != null) attrs.put(rolesClaimName, groups);
+        }
+        return attrs;
+    }
+
+    private String optionalClaim(JsonWebToken token, String name) {
+        try {
+            Object v = token.getClaim(name);
+            return v == null ? null : String.valueOf(v);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private void putIfPresent(Map<String, Object> m, String k, Object v) {
+        if (v != null) m.put(k, v);
     }
 
     @Override

@@ -2,6 +2,28 @@
 
 This module integrates the Quantum framework with AWS Cognito using Quarkus. It provides authentication and user management features and includes tests that exercise the Cognito integration.
 
+## Canonical identity flow (new)
+
+The framework now standardizes identity assembly using a claims-first approach:
+
+- Providers implement `com.e2eq.framework.model.auth.ClaimsAuthProvider` and expose `validateTokenToClaims(String token)`.
+- `validateTokenToClaims` parses the IdP token and returns `ProviderClaims` with:
+  - `subject`: the IdP subject (`sub`)
+  - `tokenRoles`: roles/groups derived from Cognito claims (`cognito:groups` by default) and, optionally, `scope`
+  - `attributes`: useful pass-through claims such as `iss`, `cognito:username`, `preferred_username`, `email`, etc.
+- The framework’s `IdentityAssembler` then builds the `SecurityIdentity` for the request:
+  - principal is the canonical `userId` (resolved from the database)
+  - roles are merged from token + credential + user-group memberships
+
+This provider still keeps the legacy method `validateAccessToken(String token)` for backward compatibility, but the framework prefers `validateTokenToClaims`.
+
+### Configurable role extraction
+
+- `aws.cognito.roles.claim-name` (default: `cognito:groups`) — claim to read roles from
+- `aws.cognito.roles.union-scope` (default: `true`) — when true, token `scope` entries are also added as roles
+
+The provider logs warnings when expected claims are missing and continues with partial data when safe.
+
 ## Required environment variables
 
 The following environment variables configure the Cognito and MongoDB settings used by the application and tests. When running the tests with real AWS access, these values must point to your Cognito user pool and other resources.
@@ -40,9 +62,14 @@ mvn test
 
 ## Running tests without Cognito
 
-If you do not want the tests to connect to AWS, set `AUTH_PROVIDER` to any value other than `cognito` before running the tests:
+If you do not want the tests to connect to AWS, either:
+
+- Set `AWS_COGNITO_ENABLED=false`, or
+- Set `AUTH_PROVIDER` to any value other than `cognito`.
 
 ```bash
+AWS_COGNITO_ENABLED=false mvn test
+# or
 AUTH_PROVIDER=disabled mvn test
 ```
 
