@@ -4,8 +4,11 @@ import com.e2eq.framework.exceptions.ReferentialIntegrityViolationException;
 import com.e2eq.framework.model.persistent.base.DataDomain;
 import com.e2eq.framework.model.persistent.morphia.CredentialRepo;
 
+import com.e2eq.framework.model.persistent.morphia.IdentityRoleResolver;
 import com.e2eq.framework.model.auth.provider.jwtToken.TokenUtils;
-import com.e2eq.framework.model.persistent.morphia.UserProfileRepo;
+
+import com.e2eq.framework.model.auth.RoleAssignment;
+import com.e2eq.framework.model.auth.RoleSource;
 import com.e2eq.framework.model.security.CredentialRefreshToken;
 import com.e2eq.framework.model.security.CredentialUserIdPassword;
 import com.e2eq.framework.model.security.DomainContext;
@@ -24,6 +27,7 @@ import io.quarkus.security.runtime.QuarkusSecurityIdentity;
 import io.quarkus.security.runtime.SecurityIdentityAssociation;
 
 import io.smallrye.jwt.auth.principal.JWTParser;
+import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.json.JsonArray;
@@ -64,19 +68,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
       @ConfigProperty(name = "com.b2bi.jwt.duration" , defaultValue = "3600")
       Long durationInSeconds;
 
-
-
-    private boolean isCognitoDisabled() {
-        try {
-            String up = (userPoolId == null) ? "" : userPoolId.trim();
-            String cid = (clientId == null) ? "" : clientId.trim();
-            return up.equalsIgnoreCase("ignore") || cid.equalsIgnoreCase("ignore");
-        } catch (Exception e) {
-            return true;
-        }
-    }
-
-    @Inject
+      @Inject
     CredentialRepo credentialRepo;
 
     @Inject
@@ -84,6 +76,9 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
     @Inject
     SecurityIdentityAssociation securityIdentityAssociation;
+
+    @Inject
+    IdentityRoleResolver identityRoleResolver;
 
     @ConfigProperty(
         name = "aws.cognito.user-pool-id",
@@ -97,6 +92,9 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
     )
     String clientId;
 
+    @ConfigProperty(name = "aws.cognito.enabled", defaultValue = "true")
+    boolean cognitoEnabled;
+
     // Additional configuration for enhancing LoginResponse
     @ConfigProperty(name = "quarkus.mongodb.connection-string", defaultValue = "")
     String mongodbConnectionString;
@@ -108,6 +106,20 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
    @Inject
    EnvConfigUtils envConfigUtils;
+
+
+
+
+    private boolean isCognitoDisabled() {
+        try {
+            String up = (userPoolId == null) ? "" : userPoolId.trim();
+            String cid = (clientId == null) ? "" : clientId.trim();
+            return (!cognitoEnabled) || up.equalsIgnoreCase("ignore") || cid.equalsIgnoreCase("ignore");
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
 
     /**
      * Constructor for CognitoAuthProvider.
@@ -154,8 +166,15 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
         }
 
         try {
-            Set<String> groups = new HashSet<>();
-            groups.addAll(Set.of(ocred.get().getRoles()));
+            // Build role sets per source for provenance
+            Set<String> credentialRoles = new LinkedHashSet<>();
+            credentialRoles.addAll(Set.of(ocred.get().getRoles()));
+            Set<String> userGroupRoles = new LinkedHashSet<>();
+            Set<String> idpRoles = new LinkedHashSet<>(); // We don't have a validated IdP identity during password login yet
+
+            // Legacy flat roles container (union of all roles)
+            Set<String> groups = new LinkedHashSet<>();
+            groups.addAll(credentialRoles);
             String accessToken;
             String refreshToken;
 
@@ -192,16 +211,60 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
                 AuthenticationResultType authResult = authResponse.authenticationResult();
                 accessToken = authResult.accessToken();
                 refreshToken = authResult.refreshToken();
-                groups.addAll(getUserGroupsForSubject(ocred.get().getSubject()));
+                // Only include roles coming from Cognito groups here (no credential roles)
+                userGroupRoles.addAll(getCognitoGroupsForUserIdOnly(ocred.get().getUserId()));
+                groups.addAll(userGroupRoles);
             }
 
             SecurityIdentity identity = buildIdentity(ocred.get().getUserId(), groups);
             securityIdentityAssociation.setIdentity(identity);
 
+            // Build role provenance assignments
+            // Prefer the central resolver (will include local user-group relationships),
+            // fallback to manual union if resolver not available.
+            Set<String> allRoles;
+            List<RoleAssignment> roleAssignments;
+            if (identityRoleResolver != null ) {
+                try {
+                    Map<String, EnumSet<RoleSource>> provenance =
+                        identityRoleResolver.resolveRoleSources(userId, envConfigUtils.getSystemRealm(), identity);
+                    roleAssignments = identityRoleResolver.toAssignments(provenance);
+                    allRoles = new LinkedHashSet<>(provenance.keySet());
+                } catch (Throwable t) {
+                    if (Log.isDebugEnabled()) {
+                        Log.debugf("IdentityRoleResolver failed, using manual union. Reason: %s", t.getMessage());
+                    }
+                    // fallthrough to manual union
+                    allRoles = null; // marker for union below
+                    roleAssignments = null;
+                }
+            } else {
+                allRoles = null; // marker for union below
+                roleAssignments = null;
+            }
+
+            if (allRoles == null) {
+                allRoles = new LinkedHashSet<>();
+                allRoles.addAll(idpRoles);
+                allRoles.addAll(credentialRoles);
+                allRoles.addAll(userGroupRoles);
+                roleAssignments = allRoles.stream()
+                    .filter(Objects::nonNull)
+                    .map(role -> {
+                        EnumSet<RoleSource> src = EnumSet.noneOf(RoleSource.class);
+                        if (idpRoles.contains(role)) src.add(RoleSource.IDP);
+                        if (credentialRoles.contains(role)) src.add(RoleSource.CREDENTIAL);
+                        if (userGroupRoles.contains(role)) src.add(RoleSource.USERGROUP);
+                        return new RoleAssignment(role, src);
+                    })
+                    .toList();
+            }
+
             LoginPositiveResponse positive = new LoginPositiveResponse(
                     userId,
                     identity,
-                    groups,
+                    allRoles,
+                    roleAssignments,
                     accessToken,
                     refreshToken,
                     new Date(
@@ -257,14 +320,65 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
         String newIdToken = authResult.idToken();
         String newRefreshToken = refreshToken;
 
-        Set<String> groups = getUserGroupsForUserId(username); // Refresh token remains the same
+        // Build role sets per source (ensure userGroupRoles only contains Cognito groups)
+        Set<String> userGroupRoles = new LinkedHashSet<>(getCognitoGroupsForUserIdOnly(username));
 
         SecurityIdentity identity = validateAccessToken(newIdToken);
+        // IdP roles (from the JWT / validated identity)
+        Set<String> idpRoles = new LinkedHashSet<>(identity.getRoles());
+        // Credential roles (optional if available)
+        Set<String> credentialRoles = new LinkedHashSet<>();
+        try {
+            Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(username, envConfigUtils.getSystemRealm(), true);
+            ocred.ifPresent(c -> credentialRoles.addAll(Set.of(c.getRoles())));
+        } catch (Exception ignore) {
+            // best-effort; if repo not available here, keep credentialRoles empty
+        }
+
+        // Build provenance with central resolver when available; fallback to manual union
+        Set<String> allRoles;
+        List<RoleAssignment> roleAssignments;
+        if (identityRoleResolver != null ) {
+            try {
+                IdentityRoleResolver resolver = identityRoleResolver;
+                Map<String, EnumSet<RoleSource>> provenance =
+                    resolver.resolveRoleSources(username, envConfigUtils.getSystemRealm(), identity);
+                roleAssignments = resolver.toAssignments(provenance);
+                allRoles = new LinkedHashSet<>(provenance.keySet());
+            } catch (Throwable t) {
+                if (Log.isDebugEnabled()) {
+                    Log.debugf("IdentityRoleResolver failed during refresh, using manual union. Reason: %s", t.getMessage());
+                }
+                // fallthrough to manual union
+                allRoles = null; // marker
+                roleAssignments = null;
+            }
+        } else {
+            allRoles = null; // marker
+            roleAssignments = null;
+        }
+        if (allRoles == null) {
+            allRoles = new LinkedHashSet<>();
+            allRoles.addAll(idpRoles);
+            allRoles.addAll(credentialRoles);
+            allRoles.addAll(userGroupRoles);
+            roleAssignments = allRoles.stream()
+                .filter(Objects::nonNull)
+                .map(role -> {
+                    EnumSet<RoleSource> src = EnumSet.noneOf(RoleSource.class);
+                    if (idpRoles.contains(role)) src.add(RoleSource.IDP);
+                    if (credentialRoles.contains(role)) src.add(RoleSource.CREDENTIAL);
+                    if (userGroupRoles.contains(role)) src.add(RoleSource.USERGROUP);
+                    return new RoleAssignment(role, src);
+                })
+                .toList();
+        }
 
         LoginPositiveResponse positive = new LoginPositiveResponse(
             username,
             identity,
-            groups,
+            allRoles,
+            roleAssignments,
             newIdToken,
             newRefreshToken,
             new Date(
@@ -506,6 +620,17 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
                }
                // Optionally update roles/password/domainContext
             } else {
+
+               if (dataDomain == null ) {
+                  // build the data domain from the domain context
+                  dataDomain = DataDomain.builder()
+                                  .orgRefName(domainContext.getOrgRefName())
+                                  .accountNum(domainContext.getAccountId())
+                                  .tenantId(domainContext.getTenantId())
+                                  .ownerId(userId)
+                                  .build();
+               }
+
                CredentialUserIdPassword cred = new CredentialUserIdPassword();
                cred.setRefName(subject);
                cred.setUserId(userId);
@@ -574,7 +699,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
       Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(userId, envConfigUtils.getSystemRealm(), true);
       String username;
       if (!ocred.isPresent()) {
-         Log.warnf("Credential not configured in database for userid: %s  can not resolve username given userid in realm: %s, cognito needs username but it could not be resolved, configure credentials in realm %s", userId, envConfigUtils.getSystemRealm());
+         Log.warnf("Credential not configured in database for userid: %s  can not resolve username given userid in realm: %s, cognito needs username but it could not be resolved, configure credentials in realm %s", userId, envConfigUtils.getSystemRealm(), envConfigUtils.getSystemRealm());
          return false;
       } else {
          username = ocred.get().getUserId();

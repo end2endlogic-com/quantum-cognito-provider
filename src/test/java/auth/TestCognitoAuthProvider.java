@@ -58,13 +58,15 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
             userManager.removeUserWithUserId(testUserId);
          }
 
-         userManager.createUser(testUserId, testPassword, Boolean.FALSE, Set.of("user"), DomainContext.builder()
-                                                                                            .accountId(testUtils.getTestAccountNumber())
-                                                                                            .defaultRealm(testUtils.getTestRealm())
-                                                                                            .tenantId(testUtils.getTestTenantId())
-                                                                                            .orgRefName(testUtils.getTestOrgRefName())
-                                                                                            .accountId(testUtils.getTestAccountNumber())
-                                                                                            .build());
+         userManager.createUser(testUserId,
+            testPassword,
+            Boolean.FALSE, Set.of("user"),
+            DomainContext.builder()
+                  .orgRefName(testUtils.getTestOrgRefName())
+               .defaultRealm(testUtils.getTestRealm())
+               .tenantId(testUtils.getTestTenantId())
+               .accountId(testUtils.getTestAccountNumber())
+               .build());
 
       }
    }
