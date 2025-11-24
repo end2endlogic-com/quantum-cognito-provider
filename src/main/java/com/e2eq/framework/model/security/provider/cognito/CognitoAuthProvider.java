@@ -129,25 +129,26 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
     }
 
 
-    private String generateRefreshToken (String userId, String accessToken, long durationInSeconds) throws IOException,
-                                                                                                              NoSuchAlgorithmException,
-                                                                                                              InvalidKeySpecException {
+    private String generateRefreshToken(String userId, String accessToken, long durationInSeconds) {
+          try {
+              String refreshToken = TokenUtils.generateRefreshToken(
+                  userId,
+                  TokenUtils.currentTimeInSecs() + durationInSeconds + TokenUtils.REFRESH_ADDITIONAL_DURATION_SECONDS,
+                  issuer);
 
-          String refreshToken = TokenUtils.generateRefreshToken(
-             userId,
-             TokenUtils.currentTimeInSecs() + durationInSeconds + TokenUtils.REFRESH_ADDITIONAL_DURATION_SECONDS,
-             issuer);
+              CredentialRefreshToken refreshToken1 = CredentialRefreshToken.builder()
+                                                        .userId(userId)
+                                                        .refreshToken(refreshToken)
+                                                        .accessToken(accessToken)
+                                                        .creationDate(new Date())
+                                                        .lastRefreshDate(new Date())
+                                                        .expirationDate(new Date(System.currentTimeMillis() + (durationInSeconds * 1000) + TokenUtils.REFRESH_ADDITIONAL_DURATION_SECONDS))
+                                                        .build();
 
-          CredentialRefreshToken refreshToken1 = CredentialRefreshToken.builder()
-                                                    .userId(userId)
-                                                    .refreshToken(refreshToken)
-                                                    .accessToken(accessToken)
-                                                    .creationDate(new Date())
-                                                    .lastRefreshDate(new Date())
-                                                    .expirationDate(new Date(System.currentTimeMillis() + (durationInSeconds * 1000) + TokenUtils.REFRESH_ADDITIONAL_DURATION_SECONDS))
-                                                    .build();
-
-          return refreshToken;
+              return refreshToken;
+          } catch (IOException | NoSuchAlgorithmException | InvalidKeySpecException e) {
+              throw new RuntimeException("Failed to generate refresh token", e);
+          }
        }
 
     @Override
@@ -571,24 +572,28 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
         }
      } else {
         // 1.1) If no existing Cognito user, create a new user
-        AdminCreateUserResponse createResp = cognitoClient.adminCreateUser(
-           AdminCreateUserRequest.builder()
-              .userPoolId(userPoolId)
-              .username(userId)
-              .temporaryPassword(password)
-              .messageAction( MessageActionType.SUPPRESS) // Suppress sending the welcome email
-              .userAttributes(AttributeType.builder().name("email").value(userId).build(),
-                    AttributeType.builder().name("email_verified").value("true").build())
-              .build());
+        // Build AdminCreateUser request conditionally based on whether a temp password was provided
+        AdminCreateUserRequest.Builder createBuilder = AdminCreateUserRequest.builder()
+            .userPoolId(userPoolId)
+            .username(userId)
+            .userAttributes(
+                AttributeType.builder().name("email").value(userId).build(),
+                AttributeType.builder().name("email_verified").value("true").build()
+            );
 
-        boolean permanent = forceChangePassword == null || !forceChangePassword;
+        // If a temp password is provided, pass it through; otherwise let Cognito generate one and send the invite email
+        if (password != null && !password.isBlank()) {
+            createBuilder.temporaryPassword(password)
+                         .messageAction(MessageActionType.SUPPRESS); // keep suppression when we provide the temp password ourselves
+        } else {
+            // send email invite
+            createBuilder
+                        .desiredDeliveryMediums(DeliveryMediumType.EMAIL);
+        }
 
-        cognitoClient.adminSetUserPassword(AdminSetUserPasswordRequest.builder()
-                                              .userPoolId(userPoolId)
-                                              .username(createResp.user().username())
-                                              .password(password)
-                                              .permanent(permanent)
-                                              .build());
+        AdminCreateUserResponse createResp = cognitoClient.adminCreateUser(createBuilder.build());
+
+        // Skip adminSetUserPassword so the user stays in FORCE_CHANGE_PASSWORD and completes the reset in Cognito flow
 
         Optional<String> osub = createResp.user().attributes().stream()
                          .filter(attr -> attr.name().equals("sub"))
