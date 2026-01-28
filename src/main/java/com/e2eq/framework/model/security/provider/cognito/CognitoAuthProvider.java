@@ -602,7 +602,20 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
 
         AdminCreateUserResponse createResp = cognitoClient.adminCreateUser(createBuilder.build());
 
-        // Skip adminSetUserPassword so the user stays in FORCE_CHANGE_PASSWORD and completes the reset in Cognito flow
+        // If password was provided and forceChangePassword is false (or null),
+        // set as permanent password so user doesn't need to change it on first login.
+        // If forceChangePassword=true, user stays in FORCE_CHANGE_PASSWORD state from adminCreateUser.
+        if (password != null && !password.isBlank()) {
+            boolean permanent = forceChangePassword == null || !forceChangePassword;
+            if (permanent) {
+                cognitoClient.adminSetUserPassword(AdminSetUserPasswordRequest.builder()
+                    .userPoolId(userPoolId)
+                    .username(createResp.user().username())
+                    .password(password)
+                    .permanent(true)
+                    .build());
+            }
+        }
 
         Optional<String> osub = createResp.user().attributes().stream()
                          .filter(attr -> attr.name().equals("sub"))
