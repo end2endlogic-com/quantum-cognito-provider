@@ -7,17 +7,17 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.end2endlogic</groupId>
     <artifactId>framework-cognito-provider</artifactId>
-    <version>1.2.3-SNAPSHOT</version>
+    <version>1.2.3</version>
 
   <parent>
       <groupId>com.end2endlogic</groupId>
       <artifactId>quantum-parent</artifactId>
-      <version>1.2.3-SNAPSHOT</version>
+      <version>1.2.3</version>
     </parent>
 
   <properties>
       <lombok.version>1.18.32</lombok.version>
-      <quantum.version>1.2.3-SNAPSHOT</quantum.version>
+      <quantum.version>1.2.3</quantum.version>
   </properties>
 
 
