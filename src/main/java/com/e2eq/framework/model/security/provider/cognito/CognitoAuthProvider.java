@@ -229,6 +229,17 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
             SecurityIdentity identity = buildIdentity(ocred.get().getUserId(), ocred.get().getSubject(), groups);
             securityIdentityAssociation.setIdentity(identity);
 
+            // Determine the effective realm from the credential's domainContext
+            // Credentials are stored in system-com but contain the user's actual realm in domainContext.defaultRealm
+            String credentialRealm = (ocred.get().getDomainContext() != null)
+                ? ocred.get().getDomainContext().getDefaultRealm()
+                : envConfigUtils.getSystemRealm();
+
+            if (Log.isDebugEnabled()) {
+                Log.debugf("CognitoAuthProvider.login: userId=%s, credentialRealm=%s (from domainContext.defaultRealm)",
+                    userId, credentialRealm);
+            }
+
             // Build role provenance assignments
             // Prefer the central resolver (will include local user-group relationships),
             // fallback to manual union if resolver not available.
@@ -237,7 +248,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
             if (identityRoleResolver != null ) {
                 try {
                     Map<String, EnumSet<RoleSource>> provenance =
-                        identityRoleResolver.resolveRoleSources(userId, envConfigUtils.getSystemRealm(), identity);
+                        identityRoleResolver.resolveRoleSources(userId, credentialRealm, identity);
                     roleAssignments = identityRoleResolver.toAssignments(provenance);
                     allRoles = new LinkedHashSet<>(provenance.keySet());
                 } catch (Throwable t) {
@@ -281,7 +292,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
                             TokenUtils.currentTimeInSecs() + durationInSeconds
                     ).getTime(),
                     mongodbConnectionString,
-                    envConfigUtils.getSystemRealm()
+                    credentialRealm
             );
             return new LoginResponse(
                 true,
@@ -338,11 +349,24 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
         Set<String> idpRoles = new LinkedHashSet<>(identity.getRoles());
         // Credential roles (optional if available)
         Set<String> credentialRoles = new LinkedHashSet<>();
+        // Determine the effective realm from the credential's domainContext
+        String credentialRealm = envConfigUtils.getSystemRealm(); // default fallback
         try {
             Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(username, envConfigUtils.getSystemRealm(), true);
-            ocred.ifPresent(c -> credentialRoles.addAll(Set.of(c.getRoles())));
+            if (ocred.isPresent()) {
+                credentialRoles.addAll(Set.of(ocred.get().getRoles()));
+                // Get the realm from credential's domainContext
+                if (ocred.get().getDomainContext() != null && ocred.get().getDomainContext().getDefaultRealm() != null) {
+                    credentialRealm = ocred.get().getDomainContext().getDefaultRealm();
+                }
+            }
         } catch (Exception ignore) {
-            // best-effort; if repo not available here, keep credentialRoles empty
+            // best-effort; if repo not available here, keep credentialRoles empty and use default realm
+        }
+
+        if (Log.isDebugEnabled()) {
+            Log.debugf("CognitoAuthProvider.refreshTokens: username=%s, credentialRealm=%s (from domainContext.defaultRealm)",
+                username, credentialRealm);
         }
 
         // Build provenance with central resolver when available; fallback to manual union
@@ -352,7 +376,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
             try {
                 IdentityRoleResolver resolver = identityRoleResolver;
                 Map<String, EnumSet<RoleSource>> provenance =
-                    resolver.resolveRoleSources(username, envConfigUtils.getSystemRealm(), identity);
+                    resolver.resolveRoleSources(username, credentialRealm, identity);
                 roleAssignments = resolver.toAssignments(provenance);
                 allRoles = new LinkedHashSet<>(provenance.keySet());
             } catch (Throwable t) {
@@ -395,7 +419,7 @@ public class CognitoAuthProvider extends BaseAuthProvider implements AuthProvide
                 TokenUtils.currentTimeInSecs() + durationInSeconds
             ).getTime(),
             mongodbConnectionString,
-            envConfigUtils.getSystemRealm()
+            credentialRealm
         );
         return new LoginResponse(
             true,
