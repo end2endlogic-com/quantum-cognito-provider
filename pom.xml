@@ -7,17 +7,17 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.end2endlogic</groupId>
     <artifactId>framework-cognito-provider</artifactId>
-    <version>1.2.3</version>
+    <version>1.2.4-SNAPSHOT</version>
 
   <parent>
       <groupId>com.end2endlogic</groupId>
       <artifactId>quantum-parent</artifactId>
-      <version>1.2.3</version>
+      <version>1.2.4-SNAPSHOT</version>
     </parent>
 
   <properties>
       <lombok.version>1.18.32</lombok.version>
-      <quantum.version>1.2.3</quantum.version>
+      <quantum.version>1.2.4-SNAPSHOT</quantum.version>
   </properties>
 
 
@@ -67,6 +67,7 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-oidc</artifactId>
+            <version>${quarkus.platform.version}</version>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
@@ -81,11 +82,13 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit5</artifactId>
+            <version>${quarkus.platform.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>io.rest-assured</groupId>
             <artifactId>rest-assured</artifactId>
+            <version>5.5.5</version>
             <scope>test</scope>
         </dependency>
 
