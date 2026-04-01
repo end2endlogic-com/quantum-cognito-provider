@@ -9,17 +9,16 @@ import com.e2eq.framework.model.persistent.morphia.UserProfileRepo;
 
 import com.e2eq.framework.model.security.CredentialUserIdPassword;
 import com.e2eq.framework.model.security.DomainContext;
-import com.e2eq.framework.securityrules.SecuritySession;
-import com.e2eq.framework.util.EncryptionUtils;
+import com.e2eq.framework.security.runtime.SecuritySession;
 import com.e2eq.framework.util.TestUtils;
 import io.quarkus.logging.Log;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.wildfly.common.Assert;
 
-import java.util.Date;
 import java.util.Optional;
 import java.util.Set;
 
@@ -91,15 +90,16 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
 
             Optional<CredentialUserIdPassword> ocred = credentialRepo.findByUserId(testUserId);
             if (ocred.isPresent()) {
-               credentialRepo.delete(ocred.get());
                if (!userManager.removeUserWithUserId(testUserId)) {
                   Log.warnf("User not removed in cognito  with userid:%s in credentials collection in  realm: %s may be stale", ocred.get().getUserId(), credentialRepo.getDatabaseName());
                }
-               boolean removed = userManager.removeUserWithSubject(ocred.get().getSubject());
-               if (!removed) {
-                  Log.warnf("User not removed could not find userName:%s in credentials collection in  realm: %s: ", ocred.get().getSubject(), credentialRepo.getDatabaseName());
-               }
-               credentialRepo.delete(ocred.get());
+               credentialRepo.findByUserId(testUserId).ifPresent(existing -> {
+                  try {
+                     credentialRepo.delete(existing);
+                  } catch (ReferentialIntegrityViolationException e) {
+                     throw new RuntimeException(e);
+                  }
+               });
             }
 
             DomainContext domainContext = DomainContext.builder()
@@ -110,28 +110,10 @@ public class TestCognitoAuthProvider extends BaseRepoTest{
                                              .build();
 
             String subject = userManager.createUser(testUserId, testPassword, Boolean.FALSE,  Set.of("user", "admin"), domainContext);
-            if (userManager.userIdExists(testUserId)) {
-               // user exists in cognito but does exist in the credentials database
-               // create it in the credential database
-               CredentialUserIdPassword cred = CredentialUserIdPassword.builder()
-                                                   .userId(testUserId)
-                                                  .subject(subject)
-                                                  .passwordHash(EncryptionUtils.hashPassword(testPassword))
-                                                  .domainContext (
-                                                     DomainContext.builder()
-                                                          .orgRefName(testUtils.getTestOrgRefName())
-                                                          .defaultRealm(testUtils.getTestRealm())
-                                                          .accountId(testUtils.getTestAccountNumber())
-                                                          .tenantId(testUtils.getTestTenantId())
-                                                          .build()
-                                                  )
-                                                  .roles(Set.of("user", "admin").toArray(new String[2]))
-                                                  .lastUpdate(new Date())
-                                             .build();
-               cred = credentialRepo.save(cred);
-            } else {
-               Assert.assertTrue(userManager.userIdExists(testUserId));
-            }
+            Assert.assertTrue(userManager.userIdExists(testUserId));
+            Optional<CredentialUserIdPassword> createdCred = credentialRepo.findByUserId(testUserId);
+            Assert.assertTrue(createdCred.isPresent());
+            Assertions.assertEquals(subject, createdCred.get().getSubject());
 
             Set<String> roles = userManager.getUserRolesForUserId(testUserId);
             Assert.assertTrue(roles.contains("user"));

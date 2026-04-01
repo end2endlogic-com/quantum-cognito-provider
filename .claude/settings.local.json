@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mvn compile:*)",
+      "Bash(java:*)",
+      "Bash(mvn test:*)",
+      "Bash(zsh -l -c 'cd /Users/mingardia/dev/mrisys/end2endlogic/quantum/framework/quantum-framework && echo \"\"JAVA_HOME=$JAVA_HOME\"\" && java -version')",
+      "Bash(zsh:*)",
+      "Bash(/bin/zsh -c \"source ~/.zshrc && mvn compile -pl quantum-models,quantum-morphia-repos,quantum-framework -am -q 2>&1\")",
+      "Bash(/bin/zsh:*)"
+    ]
+  }
+}
